@@ -18,7 +18,7 @@ class LoadQueue:
         stages (pipe0/pipe1/pipeComp are not supported).
 
         Entries are allocated directly when a load address arrives from the kernel:
-        on the port_addr handshake, the entry at ldq_tail is allocated and the
+        on the port_addr handshake, the entry at q_tail is allocated and the
         address is written into it in a single cycle.
 
         Parameters:
@@ -165,8 +165,8 @@ end
 
         ######  Queue Registers ######
         # Load Queue Entries
-        ldq_addr = LogicVecArray(
-            em, "ldq_addr", "r", self.configs.num_entries, self.configs.addr_width
+        q_addr = LogicVecArray(
+            em, "q_addr", "r", self.configs.num_entries, self.configs.addr_width
         )
 
         # Queue logic
@@ -174,81 +174,81 @@ end
         # issue pointer tracks the current issuing entry, which is the next entry to be issued
         # head pointer tracks the oldest entry in the queue, which is the next entry to be retired
         # tail pointer tracks the next free entry, which is the next entry to be allocated
-        ldq_issue = LogicVec(em, "ldq_issue", "r", self.configs.queue_addr_width)
-        ldq_tail = LogicVec(em, "ldq_tail", "r", self.configs.queue_addr_width)
-        ldq_head = LogicVec(em, "ldq_head", "r", self.configs.queue_addr_width)
+        q_issue = LogicVec(em, "q_issue", "r", self.configs.q_addr_width)
+        q_tail = LogicVec(em, "q_tail", "r", self.configs.q_addr_width)
+        q_head = LogicVec(em, "q_head", "r", self.configs.q_addr_width)
 
-        ldq_issue_next = LogicVec(em, "ldq_issue_next", "w", self.configs.queue_addr_width)
-        ldq_tail_next = LogicVec(em, "ldq_tail_next", "w", self.configs.queue_addr_width)
-        ldq_head_next = LogicVec(em, "ldq_head_next", "w", self.configs.queue_addr_width)
+        q_issue_next = LogicVec(em, "q_issue_next", "w", self.configs.q_addr_width)
+        q_tail_next = LogicVec(em, "q_tail_next", "w", self.configs.q_addr_width)
+        q_head_next = LogicVec(em, "q_head_next", "w", self.configs.q_addr_width)
 
-        ldq_tail_oh = LogicVec(em, "ldq_tail_oh", "w", self.configs.num_entries)
-        BitsToOH(em, ldq_tail_oh, ldq_tail)
+        q_tail_oh = LogicVec(em, "q_tail_oh", "w", self.configs.num_entries)
+        BitsToOH(em, q_tail_oh, q_tail)
         
         issue_en = Logic(em, "issue_en", "w")
         alloc_en = Logic(em, "alloc_en", "w")
         load_en = Logic(em, "load_en", "w")
 
-        queue_full = Logic(em, "queue_full", "r")
-        queue_empty = Logic(em, "queue_empty", "w")
+        q_full = Logic(em, "q_full", "r")
+        q_empty = Logic(em, "q_empty", "w")
 
-        queue_full_w_issue = Logic(em, "queue_full_w_issue", "r")
+        q_full_w_issue = Logic(em, "q_full_w_issue", "r")
         
-        WrapAddConst(em, ldq_issue_next, ldq_issue, 1, self.configs.num_entries)
-        WrapAddConst(em, ldq_head_next, ldq_head, 1, self.configs.num_entries)
-        WrapAddConst(em, ldq_tail_next, ldq_tail, 1, self.configs.num_entries)
+        WrapAddConst(em, q_issue_next, q_issue, 1, self.configs.num_entries)
+        WrapAddConst(em, q_head_next, q_head, 1, self.configs.num_entries)
+        WrapAddConst(em, q_tail_next, q_tail, 1, self.configs.num_entries)
         
         # Update pointers
-        em.add_assignment(ldq_tail, ldq_tail_next)
-        em.add_assignment(ldq_head, ldq_head_next)
-        em.add_assignment(ldq_issue, ldq_issue_next)
+        em.add_assignment(q_tail, q_tail_next)
+        em.add_assignment(q_head, q_head_next)
+        em.add_assignment(q_issue, q_issue_next)
 
-        ldq_tail.regInit(init=0, enable=alloc_en)  # advances by 1 on each allocation
-        ldq_head.regInit(init=0, enable=load_en)
-        ldq_issue.regInit(init=0, enable=issue_en)
+        q_tail.regInit(init=0, enable=alloc_en)  # advances by 1 on each allocation
+        q_head.regInit(init=0, enable=load_en)
+        q_issue.regInit(init=0, enable=issue_en)
 
         # queue is full
-        em.add_assignment(queue_full, (ldq_tail_next == ldq_issue) & alloc_en | (queue_full & (ldq_tail == ldq_issue)))
-        em.add_assignment(queue_empty, (ldq_tail == ldq_head) & ~queue_full)
+        em.add_assignment(q_full, (q_tail_next == q_issue) & alloc_en | (q_full & (q_tail == q_issue)))
+        em.add_assignment(q_empty, (q_tail == q_head) & ~q_full)
         
-        em.add_assignment(queue_full_w_issue, (ldq_head_next == ldq_issue) | (queue_full_w_issue & (ldq_head == ldq_issue)))
+        em.add_assignment(q_full_w_issue, (q_head_next == q_issue) | (q_full_w_issue & (q_head == q_issue)))
         
         # update load queue entries
         for i in range(0, self.configs.num_entries):
-            em.add_assignment(ldq_addr[i], port_addr_i.when(Val(ldq_tail_oh, i) & alloc_en).else_(ldq_addr[i]))
+            em.add_assignment(q_addr[i], port_addr_i.when(Val(q_tail_oh, i) & alloc_en).else_(q_addr[i]))
 
         # empty queue 
-        em.add_assignment(empty_o, queue_empty)
+        em.add_assignment(empty_o, q_empty)
 
         ###### Direct Allocation ######
-        # Allocate one entry at ldq_tail whenever the kernel presents a valid load address
+        # Allocate one entry at q_tail whenever the kernel presents a valid load address
         # and the tail slot is free. The address is written into the entry in the same cycle.
 
         # Port ready when queue not full
         can_alloc = Logic(em, "can_alloc", "w")
-        em.add_assignment(can_alloc, ~queue_full & allow_alloc_i)
+        em.add_assignment(can_alloc, ~q_full & allow_alloc_i)
 
         em.add_assignment(port_addr_ready_o, can_alloc)
         em.add_assignment(alloc_en, port_addr_valid_i & can_alloc)
         ######   Register Initializations   ######
 
-        ldq_addr.regInit()
-        queue_full.regInit(init=0)
-        queue_full_w_issue.regInit(init=0)
+        q_addr.regInit()
+        q_full.regInit(init=0)
+        q_full_w_issue.regInit(init=0)
 
         ###### Load Scheduling ######
-        em.add_assignment(load_en, ~queue_empty & allow_load_i)
+        em.add_assignment(load_en, ~q_empty & allow_load_i)
         # there are items left to issue
-        # TODO: Check for situation when ldq_issue == ldq_head but it's bc the queue is full
+        # TODO: Check for situation when q_issue == q_head but it's bc the queue is full
         can_issue = Logic(em, "can_issue", "w")
-        em.add_assignment(can_issue, (ldq_issue == ldq_head & load_en) | (ldq_issue != ldq_head) | queue_full_w_issue)
+        em.add_assignment(can_issue, (q_issue == q_head & load_en) | (q_issue != q_head) | q_full_w_issue)
         em.add_assignment(issue_en, can_issue & rreq_ready_i)
 
         # Read Request
         # ID is always equal to the configuration ID
         em.add_assignment(rreq_id_o, Val(self.configs.id_val))
         # Address is from the issuing entry in the queue
-        MuxLookUp(em, rreq_addr_o, ldq_addr, ldq_issue)
+        MuxLookUp(em, rreq_addr_o, q_addr, q_issue)
         em.add_assignment(rreq_valid_o, can_issue)
 
         # Map the AXI read response channel to the load data read response channel to the kernel

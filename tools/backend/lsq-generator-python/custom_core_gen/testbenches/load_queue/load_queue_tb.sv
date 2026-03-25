@@ -22,14 +22,14 @@ logic                 clk;
 logic                 rst;
 
 // Kernel -> queue (load address)
-logic [ADDR_W-1:0]    ldp_addr_i;
-logic                 ldp_addr_valid_i;
-logic                 ldp_addr_ready_o;
+logic [ADDR_W-1:0]    port_addr_i;
+logic                 port_addr_valid_i;
+logic                 port_addr_ready_o;
 
 // Queue -> kernel (load data)
-logic [DATA_W-1:0]    ldp_data_o;
-logic                 ldp_data_valid_o;
-logic                 ldp_data_ready_i;
+logic [DATA_W-1:0]    port_data_o;
+logic                 port_data_valid_o;
+logic                 port_data_ready_i;
 
 // Status
 logic                 empty_o;
@@ -58,12 +58,12 @@ int test_counter = 0; // for debugging:
 load_queue dut (
     .clk              (clk),
     .rst              (rst),
-    .ldp_addr_i       (ldp_addr_i),
-    .ldp_addr_valid_i (ldp_addr_valid_i),
-    .ldp_addr_ready_o (ldp_addr_ready_o),
-    .ldp_data_o       (ldp_data_o),
-    .ldp_data_valid_o (ldp_data_valid_o),
-    .ldp_data_ready_i (ldp_data_ready_i),
+    .port_addr_i       (port_addr_i),
+    .port_addr_valid_i (port_addr_valid_i),
+    .port_addr_ready_o (port_addr_ready_o),
+    .port_data_o       (port_data_o),
+    .port_data_valid_o (port_data_valid_o),
+    .port_data_ready_i (port_data_ready_i),
     .empty_o          (empty_o),
     .rreq_valid_o     (rreq_valid_o),
     .rreq_ready_i     (rreq_ready_i),
@@ -104,23 +104,23 @@ endtask
 task automatic tick; @(posedge clk); #1; endtask
 
 // Drive a load-address handshake. Blocks at the posedge where both
-// ldp_addr_valid_i and ldp_addr_ready_o are simultaneously high.
+// port_addr_valid_i and port_addr_ready_o are simultaneously high.
 task automatic port_send_addr(input logic [ADDR_W-1:0] addr);
-    ldp_addr_i       = addr;
-    ldp_addr_valid_i = 1;
-    @(posedge clk iff ldp_addr_ready_o);
+    port_addr_i       = addr;
+    port_addr_valid_i = 1;
+    @(posedge clk iff port_addr_ready_o);
     #1;
-    ldp_addr_valid_i = 0;
+    port_addr_valid_i = 0;
 endtask
 
-// Assert ldp_data_ready_i and block at the posedge where both
-// ldp_data_valid_o and ldp_data_ready_i are simultaneously high.
+// Assert port_data_ready_i and block at the posedge where both
+// port_data_valid_o and port_data_ready_i are simultaneously high.
 task automatic port_recv_data(output logic [DATA_W-1:0] data);
-    ldp_data_ready_i = 1;
-    @(posedge clk iff ldp_data_valid_o);
-    data = ldp_data_o;
+    port_data_ready_i = 1;
+    @(posedge clk iff port_data_valid_o);
+    data = port_data_o;
     #1;
-    ldp_data_ready_i = 0;
+    port_data_ready_i = 0;
 endtask
 
 // AXI read-data channel (R): TB is master.
@@ -145,9 +145,9 @@ task automatic axi_receive_addr(output logic [ADDR_W-1:0] addr);
 endtask
 
 // Accept the next pending AXI read request and hold rresp_valid high until
-// rresp_ready_o (= ldp_data_ready_i) completes the handshake.
-// NOTE: rresp_ready_o is a direct passthrough of ldp_data_ready_i, so this
-// task must run in parallel with port_recv_data() whenever ldp_data_ready_i is
+// rresp_ready_o (= port_data_ready_i) completes the handshake.
+// NOTE: rresp_ready_o is a direct passthrough of port_data_ready_i, so this
+// task must run in parallel with port_recv_data() whenever port_data_ready_i is
 // not already asserted.
 task automatic axi_respond(input logic [ADDR_W-1:0] addr, input logic [DATA_W-1:0] data);
     logic [ADDR_W-1:0] captured_addr;
@@ -159,9 +159,9 @@ endtask
 
 task automatic reset();
     rst              = 1;
-    ldp_addr_valid_i = 0;
-    ldp_addr_i       = '0;
-    ldp_data_ready_i = 0;  // kernel not ready by default; tests opt-in
+    port_addr_valid_i = 0;
+    port_addr_i       = '0;
+    port_data_ready_i = 0;  // kernel not ready by default; tests opt-in
     rreq_ready_i     = 0;
     rresp_valid_i    = 0;
     rresp_id_i       = '0;
@@ -187,7 +187,7 @@ initial begin
     test_counter = 1;
     reset();
     check(empty_o,          1, "T1: empty after reset");
-    check(ldp_addr_ready_o, 1, "T1: addr ready after reset");
+    check(port_addr_ready_o, 1, "T1: addr ready after reset");
     check(rreq_valid_o,     0, "T1: no rreq after reset");
 
     // ------------------------------------------------------------------
@@ -244,13 +244,13 @@ initial begin
     test_counter = 4;
     reset();
     allow_alloc_i    = 0;
-    ldp_addr_i       = 32'hBEEF_0001;
-    ldp_addr_valid_i = 1;
+    port_addr_i       = 32'hBEEF_0001;
+    port_addr_valid_i = 1;
     tick();
-    check(ldp_addr_ready_o, 0, "T4: addr blocked when allow_alloc=0");
+    check(port_addr_ready_o, 0, "T4: addr blocked when allow_alloc=0");
     tick();
     check(rreq_valid_o, 0, "T4: no request while blocked");
-    ldp_addr_valid_i = 0;
+    port_addr_valid_i = 0;
     allow_alloc_i    = 1;
 
     // ------------------------------------------------------------------
@@ -286,7 +286,7 @@ initial begin
     begin
         logic [DATA_W-1:0] received;
         // kernel is not ready for data yet
-        ldp_data_ready_i = 0;
+        port_data_ready_i = 0;
         fork
             port_send_addr(32'hBBBB_0001);
             begin
@@ -296,9 +296,9 @@ initial begin
                 // Present the response — queue should hold valid high
                 rresp_valid_i = 1; rresp_id_i = ID_VAL; rresp_data_i = 32'hD47A_0001;
                 tick();
-                check(ldp_data_valid_o, 1, "T6: data valid with kernel not ready");
+                check(port_data_valid_o, 1, "T6: data valid with kernel not ready");
                 // Now signal kernel is ready
-                ldp_data_ready_i = 1;
+                port_data_ready_i = 1;
                 tick();
                 rresp_valid_i = 0;
             end
@@ -322,7 +322,7 @@ initial begin
     port_send_addr(32'hF001_0003);
     port_send_addr(32'hF001_0004);
     tick();
-    check(ldp_addr_ready_o, 0, "T7: not ready when full");
+    check(port_addr_ready_o, 0, "T7: not ready when full");
     check(empty_o,          0, "T7: not empty when full");
     allow_load_i = 1;
 
@@ -343,7 +343,7 @@ initial begin
                 // Wrong ID response — should not complete the handshake
                 rresp_valid_i = 1; rresp_id_i = 2'(ID_VAL + 1); rresp_data_i = 32'hBAD_DADA;
                 tick();
-                check(ldp_data_valid_o, 0, "T8: wrong ID not forwarded to kernel");
+                check(port_data_valid_o, 0, "T8: wrong ID not forwarded to kernel");
                 rresp_valid_i = 0;
                 tick();
                     tick(); // acce
@@ -472,7 +472,7 @@ initial begin
                 port_send_addr(32'hAAAA_0003);
                 port_send_addr(32'hAAAA_0004);
                 $display("T7: sent 4 addresses to fill the queue");
-                check(ldp_addr_ready_o, 0, "T7: not ready when no loads are allowed");
+                check(port_addr_ready_o, 0, "T7: not ready when no loads are allowed");
                 allow_load_i = 1;
             end
             begin
