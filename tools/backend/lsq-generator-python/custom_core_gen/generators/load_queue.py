@@ -18,7 +18,7 @@ class LoadQueue:
         stages (pipe0/pipe1/pipeComp are not supported).
 
         Entries are allocated directly when a load address arrives from the kernel:
-        on the ldp_addr handshake, the entry at ldq_tail is allocated and the
+        on the port_addr handshake, the entry at ldq_tail is allocated and the
         address is written into it in a single cycle.
 
         Parameters:
@@ -58,14 +58,14 @@ class LoadQueue:
 
         # Single load port: connection "kernel -> LoadQueue"
         # Load address channel (addr, valid, ready) from kernel
-        ldp_addr_i = LogicVec(em, "ldp_addr", "i", self.configs.addr_width)
-        ldp_addr_valid_i = Logic(em, "ldp_addr_valid", "i")
-        ldp_addr_ready_o = Logic(em, "ldp_addr_ready", "o")
+        port_addr_i = LogicVec(em, "port_addr", "i", self.configs.addr_width)
+        port_addr_valid_i = Logic(em, "port_addr_valid", "i")
+        port_addr_ready_o = Logic(em, "port_addr_ready", "o")
 
         # Load data channel (data, valid, ready) to kernel
-        ldp_data_o = LogicVec(em, "ldp_data", "o", self.configs.data_width)
-        ldp_data_valid_o = Logic(em, "ldp_data_valid", "o")
-        ldp_data_ready_i = Logic(em, "ldp_data_ready", "i")
+        port_data_o = LogicVec(em, "port_data", "o", self.configs.data_width)
+        port_data_valid_o = Logic(em, "port_data_valid", "o")
+        port_data_ready_i = Logic(em, "port_data_ready", "i")
 
         # queue empty signal
         empty_o = Logic(em, "empty", "o")
@@ -215,7 +215,7 @@ end
         
         # update load queue entries
         for i in range(0, self.configs.num_entries):
-            em.add_assignment(ldq_addr[i], ldp_addr_i.when(Val(ldq_tail_oh, i) & alloc_en).else_(ldq_addr[i]))
+            em.add_assignment(ldq_addr[i], port_addr_i.when(Val(ldq_tail_oh, i) & alloc_en).else_(ldq_addr[i]))
 
         # empty queue 
         em.add_assignment(empty_o, queue_empty)
@@ -228,8 +228,8 @@ end
         can_alloc = Logic(em, "can_alloc", "w")
         em.add_assignment(can_alloc, ~queue_full & allow_alloc_i)
 
-        em.add_assignment(ldp_addr_ready_o, can_alloc)
-        em.add_assignment(alloc_en, ldp_addr_valid_i & can_alloc)
+        em.add_assignment(port_addr_ready_o, can_alloc)
+        em.add_assignment(alloc_en, port_addr_valid_i & can_alloc)
         ######   Register Initializations   ######
 
         ldq_addr.regInit()
@@ -252,9 +252,9 @@ end
         em.add_assignment(rreq_valid_o, can_issue)
 
         # Map the AXI read response channel to the load data read response channel to the kernel
-        em.add_assignment(rresp_ready_o, ldp_data_ready_i)
-        em.add_assignment(ldp_data_o, rresp_data_i)
-        em.add_assignment(ldp_data_valid_o, rresp_valid_i & (rresp_id_i == Val(self.configs.id_val)))
+        em.add_assignment(rresp_ready_o, port_data_ready_i)
+        em.add_assignment(port_data_o, rresp_data_i)
+        em.add_assignment(port_data_valid_o, rresp_valid_i & (rresp_id_i == Val(self.configs.id_val)))
 
 
 
