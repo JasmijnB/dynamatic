@@ -5,7 +5,7 @@ from core_gen.configs import Configs
 from core_gen.ir import BinOp, Bin, Val, Bit, CustomStatement, reduce_bin
 
 
-class LoadQueue:
+class Queue:
     def __init__(self, name: str, suffix: str, configs: Configs):
         """
         LoadQueue
@@ -259,7 +259,174 @@ end
         em.add_assignment(port_data_o, rresp_data_i)
         em.add_assignment(port_data_valid_o, rresp_valid_i & (rresp_id_i == Val(self.configs.id_val)))
 
+        # Write to the file
+        output_str = em.get_definition_str(self.module_name)
+        with open(f"{path_rtl}/{self.name}.{em.get_file_suffix()}", "a") as file:
+            file.write(output_str)
+            
+    def generate_store_queue(self, em: Emitter, lsq_submodules, path_rtl) -> None:
+        """
+        Generates the VHDL 'entity' and 'architecture' sections for a Load Queue.
 
+        Appends the following to '<path_rtl>/<self.name>.vhd':
+            1. 'entity <self.module_name>' declaration
+            2. 'architecture arch of <self.module_name>' implementation
+
+        Parameters:
+            em              : an instance of the Emitter class used for code generation
+            lsq_submodules  : unused (kept for API compatibility)
+            path_rtl        : Output directory for VHDL files.
+
+        """
+        ######          IOs           ######
+        # queue empty signal
+        empty_o = Logic(em, "empty", "o")
+
+        if self.configs.master:
+            self.generate_master_interface(em, empty_o)
+
+        # Single load port: connection "kernel -> LoadQueue"
+        # Load address channel (addr, valid, ready) from kernel
+        port_addr_i = LogicVec(em, "port_addr", "i", self.configs.addr_width)
+        port_addr_valid_i = Logic(em, "port_addr_valid", "i")
+        port_addr_ready_o = Logic(em, "port_addr_ready", "o")
+
+        # Kernel → queue: store data
+        port_data_i       = LogicVec(em, "port_data",       "i", self.configs.data_width)
+        port_data_valid_i = Logic   (em, "port_data_valid", "i")
+        port_data_ready_o = Logic   (em, "port_data_ready", "o")
+
+        # Queue → kernel: execution-done (only when st_resp enabled)
+        if self.configs.st_resp:
+            port_exec_valid_o = Logic(em, "port_exec_valid", "o")
+            port_exec_ready_i = Logic(em, "port_exec_ready", "i")
+
+        # Queue → AXI: write request (AW + W channels combined)
+        wreq_valid_o = Logic   (em, "wreq_valid", "o")
+        wreq_ready_i = Logic   (em, "wreq_ready", "i")
+        wreq_id_o    = LogicVec(em, "wreq_id",    "o", self.configs.id_width)
+        wreq_addr_o  = LogicVec(em, "wreq_addr",  "o", self.configs.addr_width)
+        wreq_data_o  = LogicVec(em, "wreq_data",  "o", self.configs.data_width)
+
+        # AXI → queue: write response (B channel)
+        wresp_valid_i = Logic   (em, "wresp_valid", "i")
+        wresp_ready_o = Logic   (em, "wresp_ready", "o")
+        wresp_id_i    = LogicVec(em, "wresp_id",    "i", self.configs.id_width)
+        
+        # Inputs from dependence checker
+        allow_alloc_i = Logic(em, "allow_alloc", "i")
+        allow_load_i = Logic(em, "allow_load", "i" )
+        
+
+        ######  Queue Registers ######
+        # Load Queue Entries
+        tail_addr_valid = Logic(em, "head_addr_valid", "r")
+        tail_data_valid = Logic(em, "head_data_valid", "r")
+        
+        alloc_data_en = Logic(em, "alloc_data_en", "w")
+        alloc_addr_en = Logic(em, "alloc_addr_en", "w")
+        
+        q_addr = LogicVecArray(
+            em, "q_addr", "r", self.configs.num_entries, self.configs.addr_width
+        )
+        q_data = LogicVecArray(
+            em, "q_data", "r", self.configs.num_entries, self.configs.data_width
+        )
+
+        q_issue = LogicVec(em, "q_issue", "r", self.configs.q_addr_width)
+        q_tail = LogicVec(em, "q_tail", "r", self.configs.q_addr_width)
+        q_head = LogicVec(em, "q_head", "r", self.configs.q_addr_width)
+
+        q_issue_next = LogicVec(em, "q_issue_next", "w", self.configs.q_addr_width)
+        q_tail_next = LogicVec(em, "q_tail_next", "w", self.configs.q_addr_width)
+        q_head_next = LogicVec(em, "q_head_next", "w", self.configs.q_addr_width)
+
+        q_tail_oh = LogicVec(em, "q_tail_oh", "w", self.configs.num_entries)
+        BitsToOH(em, q_tail_oh, q_tail)
+        
+        issue_en = Logic(em, "issue_en", "w")
+        alloc_en = Logic(em, "alloc_en", "w")
+        load_en = Logic(em, "load_en", "w")
+
+        q_full = Logic(em, "q_full", "r")
+        q_empty = Logic(em, "q_empty", "w")
+
+        q_full_w_issue = Logic(em, "q_full_w_issue", "r")
+        
+        WrapAddConst(em, q_issue_next, q_issue, 1, self.configs.num_entries)
+        WrapAddConst(em, q_head_next, q_head, 1, self.configs.num_entries)
+        WrapAddConst(em, q_tail_next, q_tail, 1, self.configs.num_entries)
+        
+        # Update pointers
+        em.add_assignment(q_tail, q_tail_next)
+        em.add_assignment(q_head, q_head_next)
+        em.add_assignment(q_issue, q_issue_next)
+        
+        # reset tail valid and data valid when increasing tail pointer
+        em.add_assignment(tail_addr_valid, tail_addr_valid & ~alloc_en)
+        em.add_assignment(tail_data_valid, tail_data_valid & ~alloc_en)
+
+        q_tail.regInit(init=0, enable=alloc_en)  # advances by 1 on each allocation
+        q_head.regInit(init=0, enable=load_en)
+        q_issue.regInit(init=0, enable=issue_en)
+
+        # queue is full
+        em.add_assignment(q_full, (q_tail_next == q_issue) & alloc_en | (q_full & (q_tail == q_issue)))
+        em.add_assignment(q_empty, (q_tail == q_head) & ~q_full)
+        
+        em.add_assignment(q_full_w_issue, (q_head_next == q_issue) | (q_full_w_issue & (q_head == q_issue)))
+        
+        # update load queue entries
+        for i in range(0, self.configs.num_entries):
+            em.add_assignment(q_addr[i], port_addr_i.when(Val(q_tail_oh, i) & alloc_addr_en).else_(q_addr[i]))
+            em.add_assignment(q_data[i], port_data_i.when(Val(q_tail_oh, i) & alloc_data_en).else_(q_data[i]))
+
+        # empty queue 
+        em.add_assignment(empty_o, q_empty)
+
+        ###### Direct Allocation ######
+        # Allocate one entry at q_tail whenever the kernel presents a valid load address
+        # and the tail slot is free. The address is written into the entry in the same cycle.
+
+        # Port ready when queue not full
+        can_alloc_addr = Logic(em, "can_alloc_addr", "w")
+        em.add_assignment(can_alloc_addr, ~q_full & allow_alloc_i & ~tail_addr_valid)
+
+        em.add_assignment(port_addr_ready_o, can_alloc_addr)
+        em.add_assignment(alloc_addr_en, port_addr_valid_i & can_alloc_addr)
+
+        can_alloc_data = Logic(em, "can_alloc_data", "w")
+        em.add_assignment(can_alloc_data, ~q_full & allow_alloc_i & ~tail_data_valid)
+
+        em.add_assignment(port_data_ready_o, can_alloc_data)
+        em.add_assignment(alloc_data_en, port_data_valid_i & can_alloc_data)
+        
+        em.add_assignment(alloc_en, tail_addr_valid & tail_data_valid)
+        ######   Register Initializations   ######
+
+        q_addr.regInit()
+        q_full.regInit(init=0)
+        q_full_w_issue.regInit(init=0)
+
+        ###### Load Scheduling ######
+        em.add_assignment(load_en, ~q_empty & allow_load_i)
+        # there are items left to issue
+        # TODO: Check for situation when q_issue == q_head but it's bc the queue is full
+        can_issue = Logic(em, "can_issue", "w")
+        em.add_assignment(can_issue, (q_issue == q_head & load_en) | (q_issue != q_head) | q_full_w_issue)
+        em.add_assignment(issue_en, can_issue & rreq_ready_i)
+
+        # Read Request
+        # ID is always equal to the configuration ID
+        em.add_assignment(rreq_id_o, Val(self.configs.id_val))
+        # Address is from the issuing entry in the queue
+        MuxLookUp(em, rreq_addr_o, q_addr, q_issue)
+        em.add_assignment(rreq_valid_o, can_issue)
+
+        # Map the AXI read response channel to the load data read response channel to the kernel
+        em.add_assignment(rresp_ready_o, port_data_ready_i)
+        em.add_assignment(port_data_o, rresp_data_i)
+        em.add_assignment(port_data_valid_o, rresp_valid_i & (rresp_id_i == Val(self.configs.id_val)))
 
         # Write to the file
         output_str = em.get_definition_str(self.module_name)

@@ -5,7 +5,7 @@ import os
 from core_gen.emitters import VHDLEmitter, VerilogEmitter
 
 from custom_core_gen.configs import QueueConfig
-from custom_core_gen.generators.load_queue import LoadQueue
+from custom_core_gen.generators.load_queue import Queue
 
 
 def generate(config_path: str, output_dir: str, hdl: str, name: str = "load_queue"):
@@ -36,8 +36,8 @@ def generate(config_path: str, output_dir: str, hdl: str, name: str = "load_queu
     output_file = os.path.join(output_dir, f"{name}.{emitter.get_file_suffix()}")
     open(output_file, "w").close()
 
-    lq = LoadQueue(name=name, suffix="", configs=config)
-    lq.generate(em=emitter, lsq_submodules=None, path_rtl=output_dir)
+    lq = Queue(name=name, suffix="", configs=config)
+    lq.generate_load_queue(em=emitter, lsq_submodules=None, path_rtl=output_dir)
 
 
 if __name__ == "__main__":
