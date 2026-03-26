@@ -5,7 +5,7 @@ import os
 from core_gen.emitters import VHDLEmitter, VerilogEmitter
 
 from custom_core_gen.configs import QueueConfig
-from custom_core_gen.generators.load_queue import Queue
+from custom_core_gen.generators.queue import Queue
 
 
 def generate(config_path: str, output_dir: str, hdl: str, name: str = "load_queue"):
