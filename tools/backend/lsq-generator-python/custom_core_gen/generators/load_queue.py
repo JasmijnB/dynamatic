@@ -38,105 +38,58 @@ class LoadQueue:
         self.name = name
         self.module_name = name + suffix
         self.configs = configs
-
-    def generate(self, em: Emitter, lsq_submodules, path_rtl) -> None:
-        """
-        Generates the VHDL 'entity' and 'architecture' sections for a Load Queue.
-
-        Appends the following to '<path_rtl>/<self.name>.vhd':
-            1. 'entity <self.module_name>' declaration
-            2. 'architecture arch of <self.module_name>' implementation
-
-        Parameters:
-            em              : an instance of the Emitter class used for code generation
-            lsq_submodules  : unused (kept for API compatibility)
-            path_rtl        : Output directory for VHDL files.
-
-        """
-        ###### LoadQueue Architecture ######
-        ######          IOs           ######
-
-        # Single load port: connection "kernel -> LoadQueue"
-        # Load address channel (addr, valid, ready) from kernel
-        port_addr_i = LogicVec(em, "port_addr", "i", self.configs.addr_width)
-        port_addr_valid_i = Logic(em, "port_addr_valid", "i")
-        port_addr_ready_o = Logic(em, "port_addr_ready", "o")
-
-        # Load data channel (data, valid, ready) to kernel
-        port_data_o = LogicVec(em, "port_data", "o", self.configs.data_width)
-        port_data_valid_o = Logic(em, "port_data_valid", "o")
-        port_data_ready_i = Logic(em, "port_data_ready", "i")
-
-        # queue empty signal
-        empty_o = Logic(em, "empty", "o")
-
-        # Single AXI read channel: connection LoadQueue -> AXI
-        rreq_valid_o = Logic(em, "rreq_valid", "o")
-        rreq_ready_i = Logic(em, "rreq_ready", "i")
-        rreq_id_o = LogicVec(em, "rreq_id", "o", self.configs.id_width)
-        rreq_addr_o = LogicVec(em, "rreq_addr", "o", self.configs.addr_width)
-
-        rresp_valid_i = Logic(em, "rresp_valid", "i")
-        rresp_ready_o = Logic(em, "rresp_ready", "o")
-        rresp_id_i = LogicVec(em, "rresp_id", "i", self.configs.id_width)
-        rresp_data_i = LogicVec(em, "rresp_data", "i", self.configs.data_width)
         
-        # Inputs from dependence checker
-        allow_alloc_i = Logic(em, "allow_alloc", "i")
-        allow_load_i = Logic(em, "allow_load", "i" )
-        
-
+    def generate_master_interface(self, em: Emitter, empty_o: Logic):
         #! If this is the lq master, then we need the following logic
         #! Define new interfaces needed by dynamatic
-        if self.configs.master:
-            memStart_ready = Logic(em, "memStart_ready", "o")
-            memStart_valid = Logic(em, "memStart_valid", "i")
-            ctrlEnd_ready = Logic(em, "ctrlEnd_ready", "o")
-            ctrlEnd_valid = Logic(em, "ctrlEnd_valid", "i")
-            memEnd_ready = Logic(em, "memEnd_ready", "i")
-            memEnd_valid = Logic(em, "memEnd_valid", "o")
+        memStart_ready = Logic(em, "memStart_ready", "o")
+        memStart_valid = Logic(em, "memStart_valid", "i")
+        ctrlEnd_ready = Logic(em, "ctrlEnd_ready", "o")
+        ctrlEnd_valid = Logic(em, "ctrlEnd_valid", "i")
+        memEnd_ready = Logic(em, "memEnd_ready", "i")
+        memEnd_valid = Logic(em, "memEnd_valid", "o")
 
-            #! Add extra signals required
-            memStartReady = Logic(em, "memStartReady", "w", force_reg=True)
-            memEndValid = Logic(em, "memEndValid", "w", force_reg=True)
-            ctrlEndReady = Logic(em, "ctrlEndReady", "w", force_reg=True)
-            temp_gen_mem = Logic(em, "TEMP_GEN_MEM", "w", force_reg=True)
+        #! Add extra signals required
+        memStartReady = Logic(em, "memStartReady", "w", force_reg=True)
+        memEndValid = Logic(em, "memEndValid", "w", force_reg=True)
+        ctrlEndReady = Logic(em, "ctrlEndReady", "w", force_reg=True)
+        temp_gen_mem = Logic(em, "TEMP_GEN_MEM", "w", force_reg=True)
 
-            #! Define the needed logic
-            em.add_comment(
-                "This signal indicates that all mem. ops are completed and func. can return."
-            )
-            em.add_comment("LoadQueue can return iff all the following conditions are true:")
-            em.add_comment("1. No more upcoming BBs containing memory accesses.")
-            em.add_comment("2. The load queue is empty.")
-            em.add_assignment(
-                temp_gen_mem, ctrlEnd_valid & empty_o
-            )
+        #! Define the needed logic
+        em.add_comment(
+            "This signal indicates that all mem. ops are completed and func. can return."
+        )
+        em.add_comment("LoadQueue can return iff all the following conditions are true:")
+        em.add_comment("1. No more upcoming BBs containing memory accesses.")
+        em.add_comment("2. The load queue is empty.")
+        em.add_assignment(
+            temp_gen_mem, ctrlEnd_valid & empty_o
+        )
 
-            em.add_comment("Define logic for the new interfaces needed by dynamatic")
-            vhdl_str = ""
-            # TODO: Add proper emitter functions in order to do this
-            vhdl_str += "\tprocess (clk) is\n\tbegin\n"
-            vhdl_str += "\t" * 2 + "if rising_edge(clk) then\n"
-            vhdl_str += "\t" * 3 + "if rst = '1' then\n"
-            vhdl_str += "\t" * 4 + "memStartReady <= '1';\n"
-            vhdl_str += "\t" * 4 + "memEndValid <= '0';\n"
-            vhdl_str += "\t" * 4 + "ctrlEndReady <= '0';\n"
-            vhdl_str += "\t" * 3 + "else\n"
-            vhdl_str += (
-                "\t" * 4
-                + "memStartReady <= (memEndValid and memEnd_ready_i) or ((not (memStart_valid_i and memStartReady)) and memStartReady);\n"
-            )
-            vhdl_str += "\t" * 4 + "memEndValid <= TEMP_GEN_MEM or memEndValid;\n"
-            vhdl_str += (
-                "\t" * 4
-                + "ctrlEndReady <= (not (ctrlEnd_valid_i and ctrlEndReady)) and (TEMP_GEN_MEM or ctrlEndReady);\n"
-            )
-            vhdl_str += "\t" * 3 + "end if;\n"
-            vhdl_str += "\t" * 2 + "end if;\n"
-            vhdl_str += "\tend process;\n\n"
+        em.add_comment("Define logic for the new interfaces needed by dynamatic")
+        vhdl_str = ""
+        # TODO: Add proper emitter functions in order to do this
+        vhdl_str += "\tprocess (clk) is\n\tbegin\n"
+        vhdl_str += "\t" * 2 + "if rising_edge(clk) then\n"
+        vhdl_str += "\t" * 3 + "if rst = '1' then\n"
+        vhdl_str += "\t" * 4 + "memStartReady <= '1';\n"
+        vhdl_str += "\t" * 4 + "memEndValid <= '0';\n"
+        vhdl_str += "\t" * 4 + "ctrlEndReady <= '0';\n"
+        vhdl_str += "\t" * 3 + "else\n"
+        vhdl_str += (
+            "\t" * 4
+            + "memStartReady <= (memEndValid and memEnd_ready_i) or ((not (memStart_valid_i and memStartReady)) and memStartReady);\n"
+        )
+        vhdl_str += "\t" * 4 + "memEndValid <= TEMP_GEN_MEM or memEndValid;\n"
+        vhdl_str += (
+            "\t" * 4
+            + "ctrlEndReady <= (not (ctrlEnd_valid_i and ctrlEndReady)) and (TEMP_GEN_MEM or ctrlEndReady);\n"
+        )
+        vhdl_str += "\t" * 3 + "end if;\n"
+        vhdl_str += "\t" * 2 + "end if;\n"
+        vhdl_str += "\tend process;\n\n"
 
-            verilog_str = """
+        verilog_str = """
 always @(posedge clk) begin
     if (rst) begin
         memStartReady <= 1'b1;
@@ -155,13 +108,63 @@ always @(posedge clk) begin
 end
             """
 
-            em.add_custom_statement(CustomStatement(vhdl_str, verilog_str))
+        em.add_custom_statement(CustomStatement(vhdl_str, verilog_str))
 
-            #! Assign signals for the newly added ports
-            em.add_comment("Update new memory interfaces")
-            em.add_assignment(memStart_ready, memStartReady)
-            em.add_assignment(ctrlEnd_ready, ctrlEndReady)
-            em.add_assignment(memEnd_valid, memEndValid)
+        #! Assign signals for the newly added ports
+        em.add_comment("Update new memory interfaces")
+        em.add_assignment(memStart_ready, memStartReady)
+        em.add_assignment(ctrlEnd_ready, ctrlEndReady)
+        em.add_assignment(memEnd_valid, memEndValid)
+
+
+    def generate_load_queue(self, em: Emitter, lsq_submodules, path_rtl) -> None:
+        """
+        Generates the VHDL 'entity' and 'architecture' sections for a Load Queue.
+
+        Appends the following to '<path_rtl>/<self.name>.vhd':
+            1. 'entity <self.module_name>' declaration
+            2. 'architecture arch of <self.module_name>' implementation
+
+        Parameters:
+            em              : an instance of the Emitter class used for code generation
+            lsq_submodules  : unused (kept for API compatibility)
+            path_rtl        : Output directory for VHDL files.
+
+        """
+        ######          IOs           ######
+        # queue empty signal
+        empty_o = Logic(em, "empty", "o")
+
+        if self.configs.master:
+            self.generate_master_interface(em, empty_o)
+
+        # Single load port: connection "kernel -> LoadQueue"
+        # Load address channel (addr, valid, ready) from kernel
+        port_addr_i = LogicVec(em, "port_addr", "i", self.configs.addr_width)
+        port_addr_valid_i = Logic(em, "port_addr_valid", "i")
+        port_addr_ready_o = Logic(em, "port_addr_ready", "o")
+
+        # Load data channel (data, valid, ready) to kernel
+        port_data_o = LogicVec(em, "port_data", "o", self.configs.data_width)
+        port_data_valid_o = Logic(em, "port_data_valid", "o")
+        port_data_ready_i = Logic(em, "port_data_ready", "i")
+
+
+        # Single AXI read channel: connection LoadQueue -> AXI
+        rreq_valid_o = Logic(em, "rreq_valid", "o")
+        rreq_ready_i = Logic(em, "rreq_ready", "i")
+        rreq_id_o = LogicVec(em, "rreq_id", "o", self.configs.id_width)
+        rreq_addr_o = LogicVec(em, "rreq_addr", "o", self.configs.addr_width)
+
+        rresp_valid_i = Logic(em, "rresp_valid", "i")
+        rresp_ready_o = Logic(em, "rresp_ready", "o")
+        rresp_id_i = LogicVec(em, "rresp_id", "i", self.configs.id_width)
+        rresp_data_i = LogicVec(em, "rresp_data", "i", self.configs.data_width)
+        
+        # Inputs from dependence checker
+        allow_alloc_i = Logic(em, "allow_alloc", "i")
+        allow_load_i = Logic(em, "allow_load", "i" )
+        
 
         ######  Queue Registers ######
         # Load Queue Entries
