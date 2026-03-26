@@ -321,13 +321,13 @@ end
         
         # Inputs from dependence checker
         allow_alloc_i = Logic(em, "allow_alloc", "i")
-        allow_load_i = Logic(em, "allow_load", "i" )
+        allow_store_i = Logic(em, "allow_store", "i" )
         
 
         ######  Queue Registers ######
         # Load Queue Entries
-        tail_addr_valid = Logic(em, "head_addr_valid", "r")
-        tail_data_valid = Logic(em, "head_data_valid", "r")
+        tail_addr_valid = Logic(em, "tail_addr_valid", "r")
+        tail_data_valid = Logic(em, "tail_data_valid", "r")
         
         alloc_data_en = Logic(em, "alloc_data_en", "w")
         alloc_addr_en = Logic(em, "alloc_addr_en", "w")
@@ -369,8 +369,8 @@ end
         em.add_assignment(q_issue, q_issue_next)
         
         # reset tail valid and data valid when increasing tail pointer
-        em.add_assignment(tail_addr_valid, tail_addr_valid & ~alloc_en)
-        em.add_assignment(tail_data_valid, tail_data_valid & ~alloc_en)
+        em.add_assignment(tail_addr_valid, (alloc_addr_en | tail_addr_valid) & ~alloc_en)
+        em.add_assignment(tail_data_valid, (alloc_data_en | tail_data_valid) & ~alloc_en)
 
         q_tail.regInit(init=0, enable=alloc_en)  # advances by 1 on each allocation
         q_head.regInit(init=0, enable=load_en)
@@ -396,43 +396,50 @@ end
 
         # Port ready when queue not full
         can_alloc_addr = Logic(em, "can_alloc_addr", "w")
-        em.add_assignment(can_alloc_addr, ~q_full & allow_alloc_i & ~tail_addr_valid)
+        em.add_assignment(can_alloc_addr, allow_alloc_i & ~tail_addr_valid & ~q_full)
 
         em.add_assignment(port_addr_ready_o, can_alloc_addr)
         em.add_assignment(alloc_addr_en, port_addr_valid_i & can_alloc_addr)
 
         can_alloc_data = Logic(em, "can_alloc_data", "w")
-        em.add_assignment(can_alloc_data, ~q_full & allow_alloc_i & ~tail_data_valid)
+        em.add_assignment(can_alloc_data, allow_alloc_i & ~tail_data_valid & ~q_full)
 
         em.add_assignment(port_data_ready_o, can_alloc_data)
         em.add_assignment(alloc_data_en, port_data_valid_i & can_alloc_data)
         
-        em.add_assignment(alloc_en, tail_addr_valid & tail_data_valid)
+        # alloc is enabled when both address and data are valid or will be allocated this cycle
+        em.add_assignment(alloc_en, (tail_addr_valid | alloc_addr_en) & (tail_data_valid | alloc_data_en))
         ######   Register Initializations   ######
 
         q_addr.regInit()
+        q_data.regInit()
         q_full.regInit(init=0)
         q_full_w_issue.regInit(init=0)
+        tail_addr_valid.regInit(init=0)
+        tail_data_valid.regInit(init=0)
 
         ###### Load Scheduling ######
-        em.add_assignment(load_en, ~q_empty & allow_load_i)
+        em.add_assignment(load_en, ~q_empty & allow_store_i)
         # there are items left to issue
         # TODO: Check for situation when q_issue == q_head but it's bc the queue is full
         can_issue = Logic(em, "can_issue", "w")
         em.add_assignment(can_issue, (q_issue == q_head & load_en) | (q_issue != q_head) | q_full_w_issue)
-        em.add_assignment(issue_en, can_issue & rreq_ready_i)
+        em.add_assignment(issue_en, can_issue & wreq_ready_i)
 
-        # Read Request
+        # Write Request
         # ID is always equal to the configuration ID
-        em.add_assignment(rreq_id_o, Val(self.configs.id_val))
+        em.add_assignment(wreq_id_o, Val(self.configs.id_val))
         # Address is from the issuing entry in the queue
-        MuxLookUp(em, rreq_addr_o, q_addr, q_issue)
-        em.add_assignment(rreq_valid_o, can_issue)
+        MuxLookUp(em, wreq_addr_o, q_addr, q_issue)
+        MuxLookUp(em, wreq_data_o, q_data, q_issue)
+        em.add_assignment(wreq_valid_o, can_issue)
 
         # Map the AXI read response channel to the load data read response channel to the kernel
-        em.add_assignment(rresp_ready_o, port_data_ready_i)
-        em.add_assignment(port_data_o, rresp_data_i)
-        em.add_assignment(port_data_valid_o, rresp_valid_i & (rresp_id_i == Val(self.configs.id_val)))
+        if self.configs.st_resp:
+            em.add_assignment(port_exec_valid_o, wresp_valid_i & (wresp_id_i == Val(self.configs.id_val)))
+            em.add_assignment(wresp_ready_o, port_exec_ready_i)
+        else:
+            em.add_assignment(wresp_ready_o, Val(1))  # always ready to accept write response, but response is ignored
 
         # Write to the file
         output_str = em.get_definition_str(self.module_name)
