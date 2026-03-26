@@ -11,11 +11,7 @@ for TEST_DIR in "${SCRIPT_DIR}"/*/; do
     mkdir -p "${OUT_DIR}"
 
     echo "=== Generating ${NAME} ==="
-    PYTHONPATH="${LSQ_ROOT}" python "${SCRIPT_DIR}/test-generate.py" \
-        --config-file "${TEST_DIR}/queue-config.json" \
-        --output-dir  "${OUT_DIR}" \
-        --hdl         verilog \
-        --name        "${NAME}"
+    PYTHONPATH="${LSQ_ROOT}" python "${TEST_DIR}/generate.py"
 
     echo "=== Compiling and simulating ${NAME} ==="
     cd "${OUT_DIR}"
