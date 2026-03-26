@@ -37,7 +37,7 @@ def generate(config_path: str, output_dir: str, hdl: str, name: str = "load_queu
     open(output_file, "w").close()
 
     lq = Queue(name=name, suffix="", configs=config)
-    lq.generate_load_queue(em=emitter, lsq_submodules=None, path_rtl=output_dir)
+    lq.generate(em=emitter, lsq_submodules=None, path_rtl=output_dir)
 
 
 if __name__ == "__main__":

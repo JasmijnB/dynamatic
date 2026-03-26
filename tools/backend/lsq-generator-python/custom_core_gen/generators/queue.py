@@ -39,6 +39,12 @@ class Queue:
         self.module_name = name + suffix
         self.configs = configs
         
+    def generate(self, em: Emitter, lsq_submodules, path_rtl) -> None:
+        if self.configs.q_type == "load":
+            self.generate_load_queue(em, lsq_submodules, path_rtl)
+        elif self.configs.q_type == "store":
+            self.generate_store_queue(em, lsq_submodules, path_rtl)
+        
     def generate_master_interface(self, em: Emitter, empty_o: Logic):
         #! If this is the lq master, then we need the following logic
         #! Define new interfaces needed by dynamatic
