@@ -92,47 +92,53 @@ end
             alloc_en, issue_en, load_en — enable wires (to be driven by caller)
             q_full, q_empty, q_full_w_issue — status signals
         """
-        q_tail  = LogicVec(em, "q_tail",  "r", self.configs.q_addr_width)
+        q_done = LogicVec(em, "q_done", "r", self.configs.q_addr_width)
         q_issue = LogicVec(em, "q_issue", "r", self.configs.q_addr_width)
+        q_tail  = LogicVec(em, "q_tail",  "r", self.configs.q_addr_width)
         q_head  = LogicVec(em, "q_head",  "r", self.configs.q_addr_width)
 
-        q_tail_next  = LogicVec(em, "q_tail_next",  "w", self.configs.q_addr_width)
+        q_done_next = LogicVec(em, "q_done_next", "w", self.configs.q_addr_width)
         q_issue_next = LogicVec(em, "q_issue_next", "w", self.configs.q_addr_width)
+        q_tail_next  = LogicVec(em, "q_tail_next",  "w", self.configs.q_addr_width)
         q_head_next  = LogicVec(em, "q_head_next",  "w", self.configs.q_addr_width)
 
         q_tail_oh = LogicVec(em, "q_tail_oh", "w", self.configs.num_entries)
         BitsToOH(em, q_tail_oh, q_tail)
 
-        alloc_en = Logic(em, "alloc_en", "w")
+        done_en = Logic(em, "done_en", "w")
         issue_en = Logic(em, "issue_en", "w")
+        alloc_en = Logic(em, "alloc_en", "w")
         load_en  = Logic(em, "load_en",  "w")
 
         q_full         = Logic(em, "q_full",         "r")
         q_empty        = Logic(em, "q_empty",        "w")
         q_full_w_issue = Logic(em, "q_full_w_issue", "r")
 
-        WrapAddConst(em, q_tail_next,  q_tail,  1, self.configs.num_entries)
         WrapAddConst(em, q_issue_next, q_issue, 1, self.configs.num_entries)
+        WrapAddConst(em, q_done_next, q_done, 1, self.configs.num_entries)
+        WrapAddConst(em, q_tail_next,  q_tail,  1, self.configs.num_entries)
         WrapAddConst(em, q_head_next,  q_head,  1, self.configs.num_entries)
 
+        em.add_assignment(q_done, q_done_next)
         em.add_assignment(q_tail,  q_tail_next)
         em.add_assignment(q_issue, q_issue_next)
         em.add_assignment(q_head,  q_head_next)
 
-        q_tail .regInit(init=0, enable=alloc_en)
+        q_done.regInit(init=0, enable=done_en)
         q_issue.regInit(init=0, enable=issue_en)
+        q_tail .regInit(init=0, enable=alloc_en)
         q_head .regInit(init=0, enable=load_en)
 
-        em.add_assignment(q_full, (q_tail_next == q_issue) & alloc_en | (q_full & (q_tail == q_issue)))
+        em.add_assignment(q_full, (q_tail_next == q_done) & alloc_en | (q_full & (q_tail == q_done)))
         em.add_assignment(q_empty, (q_tail == q_head) & ~q_full)
         em.add_assignment(q_full_w_issue, (q_head_next == q_issue) | (q_full_w_issue & (q_head == q_issue)))
 
         q_full        .regInit(init=0)
         q_full_w_issue.regInit(init=0)
 
-        return (q_tail, q_issue, q_head,
+        return (q_done, q_issue, q_tail, q_head,
                 q_tail_oh,
-                alloc_en, issue_en, load_en,
+                done_en, issue_en, load_en, alloc_en,
                 q_full, q_empty, q_full_w_issue)
 
     def _setup_can_issue(self, em: Emitter, q_issue, q_head, q_full_w_issue,
@@ -184,9 +190,9 @@ end
         allow_load_i  = Logic(em, "allow_load",  "i")
 
         # Shared pointer infrastructure
-        (q_tail, q_issue, q_head,
+        (q_done, q_issue, q_tail, q_head,
          q_tail_oh,
-         alloc_en, issue_en, load_en,
+         done_en, issue_en, load_en, alloc_en,
          q_full, q_empty, q_full_w_issue) = self._setup_pointers(em)
 
         # Queue entries
@@ -221,6 +227,7 @@ end
         em.add_assignment(port_data_o,      rresp_data_i)
         em.add_assignment(port_data_valid_o,
             rresp_valid_i & (rresp_id_i == Val(self.configs.id_val)))
+        em.add_assignment(done_en, rresp_valid_i & (rresp_id_i == Val(self.configs.id_val) & port_data_ready_i))
 
         self._write_to_file(em, path_rtl)
 
@@ -260,9 +267,9 @@ end
         allow_store_i = Logic(em, "allow_store", "i")
 
         # Shared pointer infrastructure
-        (q_tail, q_issue, q_head,
+        (q_done, q_issue, q_tail, q_head,
          q_tail_oh,
-         alloc_en, issue_en, load_en,
+         done_en, issue_en, load_en, alloc_en,
          q_full, q_empty, q_full_w_issue) = self._setup_pointers(em)
 
         # Queue entries
@@ -323,8 +330,10 @@ end
             em.add_assignment(port_exec_valid_o,
                 wresp_valid_i & (wresp_id_i == Val(self.configs.id_val)))
             em.add_assignment(wresp_ready_o, port_exec_ready_i)
+            em.add_assignment(done_en, wresp_valid_i & (wresp_id_i == Val(self.configs.id_val) & port_exec_ready_i))
         else:
             em.add_assignment(wresp_ready_o, Val(1))
+            em.add_assignment(done_en, wresp_valid_i & (wresp_id_i == Val(self.configs.id_val)))
 
         self._write_to_file(em, path_rtl)
 
