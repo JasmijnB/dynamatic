@@ -373,7 +373,7 @@ initial begin
     test_counter = 9;
     reset();
     begin
-        localparam int N = 20;
+        localparam int N = 100;
         logic [ADDR_W-1:0] sent_addrs [N];
         logic [DATA_W-1:0] recv_buf   [N];
         int                recv_count;
