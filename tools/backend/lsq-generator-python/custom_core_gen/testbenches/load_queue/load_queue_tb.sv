@@ -50,8 +50,6 @@ logic [DATA_W-1:0]    rresp_data_i;
 logic                 allow_alloc_i;
 logic                 allow_load_i;
 
-int test_counter = 0; // for debugging: 
-
 // ===----------------------------------------------------------------------===
 // DUT instantiation
 // ===----------------------------------------------------------------------===
@@ -86,22 +84,7 @@ always #CLK_HALF clk = ~clk;
 // ===----------------------------------------------------------------------===
 // Helpers
 // ===----------------------------------------------------------------------===
-int fail_count = 0;
-
-task automatic check(
-    input logic [63:0] got,
-    input logic [63:0] expected,
-    input string       label
-);
-    if (got !== expected) begin
-        $display("FAIL [%s]: got 0x%0h, expected 0x%0h", label, got, expected);
-        fail_count++;
-    end else begin
-        $display("PASS [%s]", label);
-    end
-endtask
-
-task automatic tick; @(posedge clk); #1; endtask
+`include "../utils.sv"
 
 // Drive a load-address handshake. Blocks at the posedge where both
 // port_addr_valid_i and port_addr_ready_o are simultaneously high.
