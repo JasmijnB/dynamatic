@@ -1,6 +1,6 @@
 # core_gen/operators/__init__.py
 from core_gen.operators.arithmetic import WrapAdd, WrapAddConst, WrapSub
-from core_gen.operators.shifts import CyclicLeftShift
+from core_gen.operators.shifts import CyclicLeftShift, CyclicRightShift
 from core_gen.operators.reduction import Reduce
 from core_gen.operators.mux import Mux1H, Mux1HROM, MuxLookUp
 from core_gen.operators.masking import CyclicPriorityMasking
@@ -11,6 +11,7 @@ __all__ = [
     "WrapAddConst",
     "WrapSub",
     "CyclicLeftShift",
+    "CyclicRightShift",
     "Reduce",
     "Mux1H",
     "Mux1HROM",
