@@ -48,4 +48,40 @@ class QueueConfig:
     def from_json(json_path: str):
         with open(json_path, "r") as file:
             config_dict = json.load(file)
-            return QueueConfig.from_dict(config_dict)
+            return QueueConfig(config_dict)
+        
+class DependencyCheckerConfig:
+    pq: QueueConfig
+    sq: QueueConfig
+    tail_position_width: int = 2 
+    access_disparity_width: int = 2
+
+    def __init__(self, config: dict):
+        self.pq = QueueConfig(config["PQConfig"])
+        self.sq = QueueConfig(config["SQConfig"])
+        self.tail_position_width = config.get("HeadPositionWidth", 2)
+        self.access_disparity_width = config.get("AccessDisparityWidth", 2)
+
+    @staticmethod
+    def from_json(config_path:str, pq_config=None, sq_config=None):
+        if isinstance(pq_config, str):
+            pq_config_dict = json.load(open(pq_config, "r"))
+        elif isinstance(pq_config, dict):
+            pq_config_dict = pq_config
+        else:
+            pq_config_dict = None
+
+        if isinstance(sq_config, str):
+            sq_config_dict = json.load(open(sq_config, "r"))
+        elif isinstance(sq_config, dict):
+            sq_config_dict = sq_config
+        else:
+            sq_config_dict = None
+
+        with open(config_path, "r") as config_file:
+            config_dict = json.load(config_file)
+            if pq_config_dict is not None:
+                config_dict["PQConfig"] = pq_config_dict
+            if sq_config_dict is not None:
+                config_dict["SQConfig"] = sq_config_dict
+            return DependencyCheckerConfig(config_dict)
