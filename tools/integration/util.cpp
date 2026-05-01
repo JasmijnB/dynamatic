@@ -34,25 +34,8 @@ static bool runSubprocess(const std::vector<std::string> &args,
 int runIntegrationTest(IntegrationTestData &config) {
   fs::path cSourcePath =
       config.benchmarkPath / config.name / (config.name + ".c");
-
-  std::string tmpFilename = "tmp_" + config.name + ".dyn";
-  std::ofstream scriptFile(tmpFilename);
-  if (!scriptFile.is_open()) {
-    std::cout << "[ERROR] Failed to create .dyn script file" << std::endl;
-    return -1;
-  }
-
-  scriptFile << "set-dynamatic-path " << DYNAMATIC_ROOT << std::endl
-             << "set-src " << cSourcePath.string() << std::endl
-             << "set-clock-period 5" << std::endl;
-
-  // clang-format off
-  scriptFile << "compile"
-             << " --buffer-algorithm " << config.bufferAlgorithm
-             << (config.useSharing ? " --sharing" : "")
-             << (config.useRigidification ? " --rigidification" : "")
-             << " --milp-solver " << config.milpSolver << std::endl;
-  // clang-format on
+  fs::path kernelDir = cSourcePath.parent_path();
+  fs::path dynamaticBin = fs::path(DYNAMATIC_ROOT) / "bin" / "dynamatic";
 
   // Assert testVHDL or testVerilog is true
   if (!config.testVHDL && !config.testVerilog) {
@@ -61,49 +44,110 @@ int runIntegrationTest(IntegrationTestData &config) {
     return -1;
   }
 
-  if (config.verifyInvariants) {
-    scriptFile << "verify-invariants" << std::endl;
+  // Helper: write common script header (set-dynamatic-path, set-src,
+  // set-clock-period, and optionally set-output-dir).
+  auto writeHeader = [&](std::ofstream &f, const std::string &outDir) {
+    f << "set-dynamatic-path " << DYNAMATIC_ROOT << "\n"
+      << "set-src " << cSourcePath.string() << "\n"
+      << "set-clock-period 5\n";
+    if (!outDir.empty())
+      f << "set-output-dir " << outDir << "\n";
+  };
+
+  // Helper: write compile (and optional verify-invariants).
+  auto writeCompile = [&](std::ofstream &f) {
+    // clang-format off
+    f << "compile"
+      << " --buffer-algorithm " << config.bufferAlgorithm
+      << (config.useSharing ? " --sharing" : "")
+      << (config.useRigidification ? " --rigidification" : "")
+      << " --milp-solver " << config.milpSolver << "\n";
+    // clang-format on
+    if (config.verifyInvariants)
+      f << "verify-invariants\n";
+  };
+
+  // Helper: run a .dyn script, redirecting stdout/stderr into logDir.
+  auto execScript = [&](const std::string &scriptName,
+                        const fs::path &logDir) -> int {
+    std::string cmd = dynamaticBin.string() + " --exit-on-failure --run " +
+                      scriptName + " 1> " +
+                      (logDir / "dynamatic_out.txt").string() + " 2> " +
+                      (logDir / "dynamatic_err.txt").string();
+    return system(cmd.c_str());
+  };
+
+  // When only one HDL is requested, use the original single-script flow.
+  if (!config.testVerilog || !config.testVHDL) {
+    std::string outDir = config.testVHDL ? "out_vhdl" : "out_verilog";
+    fs::path logDir = kernelDir / outDir;
+    fs::create_directories(logDir);
+
+    std::string scriptName = "tmp_" + config.name + ".dyn";
+    std::ofstream f(scriptName);
+    if (!f.is_open()) {
+      std::cout << "[ERROR] Failed to create .dyn script file" << std::endl;
+      return -1;
+    }
+    writeHeader(f, outDir);
+    writeCompile(f);
+    if (config.testVerilog)
+      f << "write-hdl --hdl verilog\nsimulate\n";
+    if (config.testVHDL)
+      f << "write-hdl --hdl vhdl\nsimulate\n";
+    f << "exit\n";
+    f.close();
+
+    int status = execScript(scriptName, logDir);
+    if (status == 0)
+      config.simTime = getSimulationTime(logDir / "sim" / "report.txt");
+    return status;
   }
 
-  // Verify Verilog works correctly
-  if (config.testVerilog) {
-    scriptFile << "write-hdl --hdl verilog" << std::endl
-               << "simulate" << std::endl;
+  // Both HDLs requested: run two scripts with separate output directories so
+  // the verilog files are not overwritten by the vhdl generation.
+  //
+  // Script 1: compile + verilog write-hdl + simulate → verilog/out/
+  fs::path verilogOut = kernelDir / "verilog" / "out";
+  fs::create_directories(verilogOut);
+  {
+    std::string scriptName = "tmp_" + config.name + "_verilog.dyn";
+    std::ofstream f(scriptName);
+    if (!f.is_open()) {
+      std::cout << "[ERROR] Failed to create .dyn script file" << std::endl;
+      return -1;
+    }
+    writeHeader(f, "verilog/out");
+    writeCompile(f);
+    f << "write-hdl --hdl verilog\nsimulate\nexit\n";
   }
-  // Verify VHDL works correctly
-  if (config.testVHDL) {
-    // By default, the report containing the simulation time is re-written
-    // during the second simulation (i.e., the VHDL simulation).
-    scriptFile << "write-hdl --hdl vhdl" << std::endl
-               << "simulate" << std::endl;
+  int status = execScript("tmp_" + config.name + "_verilog.dyn", verilogOut);
+  if (status != 0)
+    return status;
+
+  // Copy the compiled IR into vhdl/out so the second script can reuse it
+  // without re-running the expensive compile step.
+  fs::path vhdlOut = kernelDir / "vhdl" / "out";
+  fs::create_directories(vhdlOut);
+  fs::path vhdlComp = vhdlOut / "comp";
+  if (fs::exists(vhdlComp))
+    fs::remove_all(vhdlComp);
+  fs::copy(verilogOut / "comp", vhdlComp, fs::copy_options::recursive);
+
+  // Script 2: vhdl write-hdl + simulate → vhdl/out/ (no compile)
+  {
+    std::string scriptName = "tmp_" + config.name + "_vhdl.dyn";
+    std::ofstream f(scriptName);
+    if (!f.is_open()) {
+      std::cout << "[ERROR] Failed to create .dyn script file" << std::endl;
+      return -1;
+    }
+    writeHeader(f, "vhdl/out");
+    f << "write-hdl --hdl vhdl\nsimulate\nexit\n";
   }
-  scriptFile << "exit" << std::endl;
-
-  scriptFile.close();
-
-  fs::path dynamaticPath = fs::path(DYNAMATIC_ROOT) / "bin" / "dynamatic";
-  fs::path dynamaticOutPath =
-      cSourcePath.parent_path() / "out" / "dynamatic_out.txt";
-  fs::path dynamaticErrPath =
-      cSourcePath.parent_path() / "out" / "dynamatic_err.txt";
-  if (!fs::exists(dynamaticOutPath.parent_path())) {
-    fs::create_directories(dynamaticOutPath.parent_path());
-  }
-
-  std::string cmd = dynamaticPath.string() + " --exit-on-failure --run ";
-  cmd += tmpFilename;
-  cmd += " 1> ";
-  cmd += dynamaticOutPath;
-  cmd += " 2> ";
-  cmd += dynamaticErrPath;
-
-  int status = system(cmd.c_str());
-  if (status == 0) {
-    fs::path logFilePath =
-        cSourcePath.parent_path() / "out" / "sim" / "report.txt";
-    config.simTime = getSimulationTime(logFilePath);
-  }
-
+  status = execScript("tmp_" + config.name + "_vhdl.dyn", vhdlOut);
+  if (status == 0)
+    config.simTime = getSimulationTime(vhdlOut / "sim" / "report.txt");
   return status;
 }
 

@@ -2,3 +2,5 @@
 **/out
 **/out_clang_frontend
 **/out_spec
+**/out_vhdl
+**/out_verilog
