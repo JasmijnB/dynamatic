@@ -1,0 +1,32 @@
+{
+    "PQConfig": {
+        "QueueType": "load",
+        "NumEntries": 4,
+        "DataWidth": 32,
+        "AddrWidth": 32,
+        "IDWidth": 2,
+        "IDVal": 0,
+        "LDPAddrWidth": 0,
+        "StResp": false,
+        "pipe0En": false,
+        "pipe1En": false,
+        "pipeCompEn": false,
+        "master": true
+    },
+    "SQConfig": {
+        "QueueType": "store",
+        "NumEntries": 4,
+        "DataWidth": 32,
+        "AddrWidth": 32,
+        "IDWidth": 2,
+        "IDVal": 0,
+        "LDPAddrWidth": 0,
+        "StResp": false,
+        "pipe0En": false,
+        "pipe1En": false,
+        "pipeCompEn": false,
+        "master": false
+    },
+    "HeadPositionWidth": 2,
+    "AccessDisparityWidth": 2
+}
