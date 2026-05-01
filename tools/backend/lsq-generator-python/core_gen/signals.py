@@ -187,10 +187,12 @@ class LogicVec(Logic):
         init: bool = True,
         dyn_comp=False,
         force_reg=False,
+        is_signed=False,
     ) -> None:
         Logic.__init__(self, em, name, type, False, dyn_comp, force_reg)
         assert size > 0
         self.size = size
+        self.is_signed = is_signed
         if init:
             self.signalInit()
 
@@ -224,6 +226,10 @@ class LogicVec(Logic):
         else:
             assert i < self.size
             return self.em.index_var(Logic.getNameWrite(self, sufix), i)
+
+    def get_type(self):
+        from core_gen.ir import Type
+        return Type.SIGNED if self.is_signed else Type.LOGIC
 
     def signalInit(self, sufix=""):
         self.em.logicvec_signal_init(self, sufix)
@@ -334,9 +340,10 @@ class LogicVecArray(LogicVec):
         size: int = 1,
         dyn_comp=False,
         force_reg=False,
+        is_signed=False,
     ):
         self.length = length
-        LogicVec.__init__(self, em, name, type, size, False, dyn_comp, force_reg)
+        LogicVec.__init__(self, em, name, type, size, False, dyn_comp, force_reg, is_signed)
         self.signalInit()
 
     def __repr__(self) -> str:
@@ -363,6 +370,7 @@ class LogicVecArray(LogicVec):
             self.size,
             False,
             self.dyn_comp,
+            is_signed=self.is_signed,
         )
 
     def regInit(self, enable=None, init=None) -> None:
