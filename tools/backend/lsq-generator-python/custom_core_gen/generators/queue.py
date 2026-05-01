@@ -21,7 +21,7 @@ class Queue:
     # Shared helpers
     # ===----------------------------------------------------------------------===
 
-    def _generate_master_interface(self, em: Emitter, empty_o: Logic):
+    def _generate_master_interface(self, em: Emitter, empty: Logic):
         memStart_ready = Logic(em, "memStart_ready", "o")
         memStart_valid = Logic(em, "memStart_valid", "i")
         ctrlEnd_ready  = Logic(em, "ctrlEnd_ready",  "o")
@@ -32,13 +32,13 @@ class Queue:
         memStartReady = Logic(em, "memStartReady", "w", force_reg=True)
         memEndValid   = Logic(em, "memEndValid",   "w", force_reg=True)
         ctrlEndReady  = Logic(em, "ctrlEndReady",  "w", force_reg=True)
-        temp_gen_mem  = Logic(em, "TEMP_GEN_MEM",  "w", force_reg=True)
+        temp_gen_mem  = Logic(em, "TEMP_GEN_MEM",  "w")
 
         em.add_comment("This signal indicates that all mem. ops are completed and func. can return.")
         em.add_comment("Queue can return iff all the following conditions are true:")
         em.add_comment("1. No more upcoming BBs containing memory accesses.")
         em.add_comment("2. The queue is empty.")
-        em.add_assignment(temp_gen_mem, ctrlEnd_valid & empty_o)
+        em.add_assignment(temp_gen_mem, ctrlEnd_valid & empty)
 
         em.add_comment("Define logic for the new interfaces needed by dynamatic")
         vhdl_str  = "\tprocess (clk) is\n\tbegin\n"
@@ -165,8 +165,6 @@ end
     def generate_load_queue(self, em: Emitter, lsq_submodules, path_rtl) -> None:
         # IOs
         empty_o = Logic(em, "empty", "o")
-        if self.configs.master:
-            self._generate_master_interface(em, empty_o)
 
         port_addr_i       = LogicVec(em, "port_addr",       "i", self.configs.addr_width)
         port_addr_valid_i = Logic   (em, "port_addr_valid", "i")
@@ -229,6 +227,9 @@ end
             rresp_valid_i & (rresp_id_i == Val(self.configs.id_val)))
         em.add_assignment(done_en, rresp_valid_i & (rresp_id_i == Val(self.configs.id_val) & port_data_ready_i))
 
+        if self.configs.master:
+            self._generate_master_interface(em, q_empty)
+
         self._write_to_file(em, path_rtl)
 
     # ===----------------------------------------------------------------------===
@@ -238,8 +239,6 @@ end
     def generate_store_queue(self, em: Emitter, lsq_submodules, path_rtl) -> None:
         # IOs
         empty_o = Logic(em, "empty", "o")
-        if self.configs.master:
-            self._generate_master_interface(em, empty_o)
 
         port_addr_i       = LogicVec(em, "port_addr",       "i", self.configs.addr_width)
         port_addr_valid_i = Logic   (em, "port_addr_valid", "i")
@@ -334,6 +333,9 @@ end
         else:
             em.add_assignment(wresp_ready_o, Val(1))
             em.add_assignment(done_en, wresp_valid_i & (wresp_id_i == Val(self.configs.id_val)))
+
+        if self.configs.master:
+            self._generate_master_interface(em, q_empty)
 
         self._write_to_file(em, path_rtl)
 
