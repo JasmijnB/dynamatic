@@ -10,5 +10,5 @@ directory = pathlib.Path(__file__).parent.resolve()
 
 em = VerilogEmitter()
 config = QueueConfig.from_json(directory / "queue-config.json")
-queue = Queue(name="store_queue", suffix="", configs=config)
+queue = Queue(name="load_queue", suffix="", configs=config)
 queue.generate(em=em, lsq_submodules=None, path_rtl=directory / "out")
