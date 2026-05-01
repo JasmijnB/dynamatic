@@ -41,10 +41,10 @@ class VHDLEmitter(Emitter):
 
     def add_assignment(self, out, statement: Statement, in_process=False):
         out_str, size = self.assigned_var_to_str(out)
-        meta = Meta(size, Type.LOGIC, -1)
+        out_type = out.get_type() if isinstance(out, Logic) else Type.LOGIC
+        meta = Meta(size, out_type, -1)
         statement_str = statement.to_str(self, meta)
-        # Assume we only write to logic types
-        statement_str = self.fix_type(Type.LOGIC, statement.get_type(), statement_str)
+        statement_str = self.fix_type(out_type, statement.get_type(), statement_str)
         self.statementString += (
             self.get_current_indent() + f"{out_str} <= {statement_str};\n"
         )
@@ -178,7 +178,13 @@ class VHDLEmitter(Emitter):
                 if self.is_surrounded_by_parentheses(child_str)
                 else f"unsigned({child_str})"
             )
-        elif super_type == Type.LOGIC and child_type == Type.ARITH:
+        elif super_type == Type.SIGNED and child_type == Type.LOGIC:
+            return (
+                f"signed{child_str}"
+                if self.is_surrounded_by_parentheses(child_str)
+                else f"signed({child_str})"
+            )
+        elif super_type == Type.LOGIC and child_type in (Type.ARITH, Type.SIGNED):
             return (
                 f"std_logic_vector{child_str}"
                 if self.is_surrounded_by_parentheses(child_str)
@@ -188,12 +194,28 @@ class VHDLEmitter(Emitter):
             return child_str
 
     def bin_to_str(self, bin: Bin, meta: Meta) -> str:
-        meta = Meta(meta.size, bin.get_param_type(), bin.get_precedence())
-        left_str = bin.left.to_str(self, meta)
-        right_str = bin.right.to_str(self, meta)
+        param_type = bin.get_param_type()
+        left_type = bin.left.get_type()
+        right_type = bin.right.get_type()
 
-        left_str = self.fix_type(bin.get_param_type(), bin.left.get_type(), left_str)
-        right_str = self.fix_type(bin.get_param_type(), bin.right.get_type(), right_str)
+        # Promote ARITH to SIGNED when the outer assignment context is SIGNED,
+        # or when one of the operands is already a signed type.
+        if param_type == Type.ARITH and (
+            meta.type == Type.SIGNED or Type.SIGNED in (left_type, right_type)
+        ):
+            effective_param = Type.SIGNED
+        else:
+            effective_param = param_type
+
+        # Propagate a concrete type to the ANY operand so integers are rendered correctly
+        effective_left = right_type if left_type == Type.ANY and right_type != Type.ANY else effective_param
+        effective_right = left_type if right_type == Type.ANY and left_type != Type.ANY else effective_param
+
+        left_str = bin.left.to_str(self, Meta(meta.size, effective_left, bin.get_precedence()))
+        right_str = bin.right.to_str(self, Meta(meta.size, effective_right, bin.get_precedence()))
+
+        left_str = self.fix_type(effective_param, left_type, left_str)
+        right_str = self.fix_type(effective_param, right_type, right_str)
 
         return f"{left_str} {self.get_binop_str(bin.op)} {right_str}"
 
@@ -260,26 +282,27 @@ class VHDLEmitter(Emitter):
             )
 
     def logicvec_signal_init(self, vec: LogicVec, sufix: str):
+        type_str = f"signed({vec.size-1} downto 0)" if vec.is_signed else f"std_logic_vector({vec.size-1} downto 0)"
         if vec.type == "w":
             self.add_signal_str(
-                f"\tsignal {vec.get_base_name(sufix)} : std_logic_vector({vec.size-1} downto 0);\n"
+                f"\tsignal {vec.get_base_name(sufix)} : {type_str};\n"
             )
         elif vec.type == "r":
             self.add_signal_str(
-                f"\tsignal {vec.get_base_name(sufix)}_d : std_logic_vector({vec.size-1} downto 0);\n"
+                f"\tsignal {vec.get_base_name(sufix)}_d : {type_str};\n"
             )
             self.add_signal_str(
-                f"\tsignal {vec.get_base_name(sufix)}_q : std_logic_vector({vec.size-1} downto 0);\n"
+                f"\tsignal {vec.get_base_name(sufix)}_q : {type_str};\n"
             )
         elif vec.type == "i":
             self.add_port_str(";\n")
             self.add_port_str(
-                f'\t\t{vec.get_base_name(sufix)}{'_i' if not vec.dyn_comp else ""} : in std_logic_vector({vec.size-1} downto 0)'
+                f'\t\t{vec.get_base_name(sufix)}{'_i' if not vec.dyn_comp else ""} : in {type_str}'
             )
         elif vec.type == "o":
             self.add_port_str(";\n")
             self.add_port_str(
-                f'\t\t{vec.get_base_name(sufix)}{'_o' if not vec.dyn_comp else ""} : out std_logic_vector({vec.size-1} downto 0)'
+                f'\t\t{vec.get_base_name(sufix)}{'_o' if not vec.dyn_comp else ""} : out {type_str}'
             )
 
     def logic_reg_init(self, logic: Logic, enable=None, init=None) -> None:
@@ -403,7 +426,7 @@ class VHDLEmitter(Emitter):
 
     @staticmethod
     def int_to_str(din: int, size=None, meta=None) -> str:
-        if meta is not None and meta.type == Type.ARITH:
+        if meta is not None and meta.type in (Type.ARITH, Type.SIGNED):
             return str(din)
 
         if size == None:
@@ -437,7 +460,10 @@ class VHDLEmitter(Emitter):
         Generate a VHDL array-index expression for selecting an element
         """
         return f"{din.getNameRead()}(to_integer(unsigned({sel.getNameRead()})))"
-
+    
+    def get_custom_str(self, custom_statement) -> str:
+        return custom_statement.vhdl_str
+    
     def add_custom_statement(self, custom_statement):
-        for line in custom_statement.vhdl_str.splitlines():
+        for line in self.get_custom_str(custom_statement).splitlines():
             self.statementString += self.get_current_indent() + line + "\n"

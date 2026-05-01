@@ -81,6 +81,7 @@ class Statement:
 class Type(Enum):
     LOGIC = "logic"
     ARITH = "arith"
+    SIGNED = "signed"
     BOOL = "bool"
     ANY = "any"
 

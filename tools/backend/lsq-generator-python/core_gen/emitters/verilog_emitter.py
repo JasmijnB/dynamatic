@@ -36,8 +36,14 @@ class VerilogEmitter(Emitter):
 
     def add_assignment(self, out, statement: Statement, in_process=False):
         out_str, size = self.assigned_var_to_str(out)
-        meta = Meta(size, Type.LOGIC, -1)
+        out_type = out.get_type() if isinstance(out, Logic) else Type.LOGIC
+
+        meta = Meta(size, out_type, -1)
         statement_str = statement.to_str(self, meta)
+
+        if out_type == Type.SIGNED and statement.get_type() not in (Type.SIGNED, Type.ANY):
+            statement_str = f"$signed({statement_str})"
+
         # Assume we only write to logic types
         if in_process:
             self.statementString += (
@@ -145,12 +151,23 @@ class VerilogEmitter(Emitter):
             raise ValueError("Invalid bit value")
 
     def bin_to_str(self, bin: Bin, meta: Meta) -> str:
-        meta = Meta(meta.size, bin.get_param_type(), bin.get_precedence())
-        left_str = bin.left.to_str(self, meta)
-        right_str = bin.right.to_str(self, meta)
+        param_type = bin.get_param_type()
+        left_type = bin.left.get_type()
+        right_type = bin.right.get_type()
+
+        # Propagate a concrete type to the ANY operand so integers are rendered correctly
+        effective_left = right_type if left_type == Type.ANY and right_type != Type.ANY else param_type
+        effective_right = left_type if right_type == Type.ANY and left_type != Type.ANY else param_type
+
+        left_str = bin.left.to_str(self, Meta(meta.size, effective_left, bin.get_precedence()))
+        right_str = bin.right.to_str(self, Meta(meta.size, effective_right, bin.get_precedence()))
 
         if bin.op == BinOp.CONCAT:
             return f"{{{left_str}, {right_str}}}"
+
+        if param_type == Type.SIGNED:
+            left_str = f"$signed({left_str})"
+            right_str = f"$signed({right_str})"
 
         return f"{left_str} {self.get_binop_str(bin.op)} {right_str}"
 
@@ -189,27 +206,28 @@ class VerilogEmitter(Emitter):
             )
 
     def logicvec_signal_init(self, vec: LogicVec, sufix: str):
+        signed_str = " signed" if vec.is_signed else ""
         if vec.type == "w":
             prefix = "reg" if vec.force_reg else "wire"
             self.add_signal_str(
-                f"\t{prefix} [{vec.size-1}:0] {vec.get_base_name(sufix)};\n"
+                f"\t{prefix}{signed_str} [{vec.size-1}:0] {vec.get_base_name(sufix)};\n"
             )
         elif vec.type == "r":
             self.add_signal_str(
-                f"\twire [{vec.size-1}:0] {vec.get_base_name(sufix)}_d;\n"
+                f"\twire{signed_str} [{vec.size-1}:0] {vec.get_base_name(sufix)}_d;\n"
             )
             self.add_signal_str(
-                f"\treg [{vec.size-1}:0] {vec.get_base_name(sufix)}_q;\n"
+                f"\treg{signed_str} [{vec.size-1}:0] {vec.get_base_name(sufix)}_q;\n"
             )
         elif vec.type == "i":
             self.add_port_str(",\n")
             self.add_port_str(
-                f'\t\tinput [{vec.size-1}:0] {vec.get_base_name(sufix)}{'_i' if not vec.dyn_comp else ""}'
+                f'\t\tinput{signed_str} [{vec.size-1}:0] {vec.get_base_name(sufix)}{'_i' if not vec.dyn_comp else ""}'
             )
         elif vec.type == "o":
             self.add_port_str(",\n")
             self.add_port_str(
-                f'\t\toutput [{vec.size-1}:0] {vec.get_base_name(sufix)}{'_o' if not vec.dyn_comp else ""}'
+                f'\t\toutput{signed_str} [{vec.size-1}:0] {vec.get_base_name(sufix)}{'_o' if not vec.dyn_comp else ""}'
             )
 
     def logic_reg_init(self, logic: Logic, enable=None, init=None) -> None:
@@ -349,6 +367,9 @@ class VerilogEmitter(Emitter):
 
     @staticmethod
     def int_to_str(din, size=None, meta=None) -> str:
+        if meta is not None and meta.type in (Type.ARITH, Type.SIGNED):
+            return str(din)
+
         if size == None:
             size = 1
 
@@ -376,7 +397,10 @@ class VerilogEmitter(Emitter):
         Generate a Verilog array-index expression for selecting an element
         """
         return f"{din.getNameRead()}[{sel.getNameRead()}]"
+    
+    def get_custom_str(self, custom_statement) -> str:
+        return custom_statement.verilog_str
 
     def add_custom_statement(self, custom_statement):
-        for line in custom_statement.verilog_str.splitlines():
+        for line in self.get_custom_str(custom_statement).splitlines():
             self.statementString += self.get_current_indent() + line + "\n"
