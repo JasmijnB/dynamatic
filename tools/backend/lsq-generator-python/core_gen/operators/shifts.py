@@ -105,7 +105,7 @@ def RotateLogicArray(em: Emitter, dout, din, distance, layer, left=True) -> str:
         RotateLogicArray(em, dout, res, distance, layer - 1)
 
 
-def RotateLogicVecArray(em: Emitter, dout, din, distance, layer) -> str:
+def RotateLogicVecArray(em: Emitter, dout, din, distance, layer, left=True) -> str:
     """
     Recursively perform a cyclic left shift of the LogicVecArray "din" by the amount
     specified in "distance".
