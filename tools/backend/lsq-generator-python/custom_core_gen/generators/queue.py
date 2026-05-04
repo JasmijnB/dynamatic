@@ -11,8 +11,16 @@ class Queue:
         self.name = name
         self.module_name = name + suffix
         self.configs = configs
+        self.ports: dict[str, Logic | LogicVec] = {}
+
+    def _add_port(self, signal: Logic | LogicVec) -> Logic | LogicVec:
+        """Register a port signal so instantiate() can use it later."""
+        name = signal.getNameRead() if signal.type == "i" else signal.getNameWrite()
+        self.ports[name] = signal
+        return signal
 
     def generate(self, em: Emitter, lsq_submodules, path_rtl) -> None:
+        self.ports.clear()
         if self.configs.q_type == "load":
             self.generate_load_queue(em, lsq_submodules, path_rtl)
         elif self.configs.q_type == "store":
@@ -23,12 +31,12 @@ class Queue:
     # ===----------------------------------------------------------------------===
 
     def _generate_master_interface(self, em: Emitter, empty: Logic):
-        memStart_ready = Logic(em, "memStart_ready", "o")
-        memStart_valid = Logic(em, "memStart_valid", "i")
-        ctrlEnd_ready  = Logic(em, "ctrlEnd_ready",  "o")
-        ctrlEnd_valid  = Logic(em, "ctrlEnd_valid",  "i")
-        memEnd_ready   = Logic(em, "memEnd_ready",   "i")
-        memEnd_valid   = Logic(em, "memEnd_valid",   "o")
+        memStart_ready = self._add_port(Logic(em, "memStart_ready", "o"))
+        memStart_valid = self._add_port(Logic(em, "memStart_valid", "i"))
+        ctrlEnd_ready  = self._add_port(Logic(em, "ctrlEnd_ready",  "o"))
+        ctrlEnd_valid  = self._add_port(Logic(em, "ctrlEnd_valid",  "i"))
+        memEnd_ready   = self._add_port(Logic(em, "memEnd_ready",   "i"))
+        memEnd_valid   = self._add_port(Logic(em, "memEnd_valid",   "o"))
 
         memStartReady = Logic(em, "memStartReady", "w", force_reg=True)
         memEndValid   = Logic(em, "memEndValid",   "w", force_reg=True)
@@ -205,28 +213,23 @@ end
 
     def generate_load_queue(self, em: Emitter, lsq_submodules, path_rtl) -> None:
         # IOs
-        empty_o = Logic(em, "empty", "o")
-
-        port_addr_i       = LogicVec(em, "port_addr",       "i", self.configs.addr_width)
-        port_addr_valid_i = Logic   (em, "port_addr_valid", "i")
-        port_addr_ready_o = Logic   (em, "port_addr_ready", "o")
-
-        port_data_o       = LogicVec(em, "port_data",       "o", self.configs.data_width)
-        port_data_valid_o = Logic   (em, "port_data_valid", "o")
-        port_data_ready_i = Logic   (em, "port_data_ready", "i")
-
-        rreq_valid_o = Logic   (em, "rreq_valid", "o")
-        rreq_ready_i = Logic   (em, "rreq_ready", "i")
-        rreq_id_o    = LogicVec(em, "rreq_id",    "o", self.configs.id_width)
-        rreq_addr_o  = LogicVec(em, "rreq_addr",  "o", self.configs.addr_width)
-
-        rresp_valid_i = Logic   (em, "rresp_valid", "i")
-        rresp_ready_o = Logic   (em, "rresp_ready", "o")
-        rresp_id_i    = LogicVec(em, "rresp_id",    "i", self.configs.id_width)
-        rresp_data_i  = LogicVec(em, "rresp_data",  "i", self.configs.data_width)
-
-        allow_alloc_i = Logic(em, "allow_alloc", "i")
-        allow_access_i  = Logic(em, "allow_access",  "i")
+        empty_o           = self._add_port(Logic   (em, "empty",          "o"))
+        port_addr_i       = self._add_port(LogicVec(em, "port_addr",       "i", self.configs.addr_width))
+        port_addr_valid_i = self._add_port(Logic   (em, "port_addr_valid", "i"))
+        port_addr_ready_o = self._add_port(Logic   (em, "port_addr_ready", "o"))
+        port_data_o       = self._add_port(LogicVec(em, "port_data",       "o", self.configs.data_width))
+        port_data_valid_o = self._add_port(Logic   (em, "port_data_valid", "o"))
+        port_data_ready_i = self._add_port(Logic   (em, "port_data_ready", "i"))
+        rreq_valid_o      = self._add_port(Logic   (em, "rreq_valid", "o"))
+        rreq_ready_i      = self._add_port(Logic   (em, "rreq_ready", "i"))
+        rreq_id_o         = self._add_port(LogicVec(em, "rreq_id",    "o", self.configs.id_width))
+        rreq_addr_o       = self._add_port(LogicVec(em, "rreq_addr",  "o", self.configs.addr_width))
+        rresp_valid_i     = self._add_port(Logic   (em, "rresp_valid", "i"))
+        rresp_ready_o     = self._add_port(Logic   (em, "rresp_ready", "o"))
+        rresp_id_i        = self._add_port(LogicVec(em, "rresp_id",    "i", self.configs.id_width))
+        rresp_data_i      = self._add_port(LogicVec(em, "rresp_data",  "i", self.configs.data_width))
+        allow_alloc_i     = self._add_port(Logic   (em, "allow_alloc",  "i"))
+        allow_access_i    = self._add_port(Logic   (em, "allow_access", "i"))
 
         # Shared pointer infrastructure
         (q_done, q_issue, q_tail, q_head,
@@ -280,32 +283,28 @@ end
 
     def generate_store_queue(self, em: Emitter, lsq_submodules, path_rtl) -> None:
         # IOs
-        empty_o = Logic(em, "empty", "o")
-
-        port_addr_i       = LogicVec(em, "port_addr",       "i", self.configs.addr_width)
-        port_addr_valid_i = Logic   (em, "port_addr_valid", "i")
-        port_addr_ready_o = Logic   (em, "port_addr_ready", "o")
-
-        port_data_i       = LogicVec(em, "port_data",       "i", self.configs.data_width)
-        port_data_valid_i = Logic   (em, "port_data_valid", "i")
-        port_data_ready_o = Logic   (em, "port_data_ready", "o")
+        empty_o           = self._add_port(Logic   (em, "empty",          "o"))
+        port_addr_i       = self._add_port(LogicVec(em, "port_addr",       "i", self.configs.addr_width))
+        port_addr_valid_i = self._add_port(Logic   (em, "port_addr_valid", "i"))
+        port_addr_ready_o = self._add_port(Logic   (em, "port_addr_ready", "o"))
+        port_data_i       = self._add_port(LogicVec(em, "port_data",       "i", self.configs.data_width))
+        port_data_valid_i = self._add_port(Logic   (em, "port_data_valid", "i"))
+        port_data_ready_o = self._add_port(Logic   (em, "port_data_ready", "o"))
 
         if self.configs.st_resp:
-            port_exec_valid_o = Logic(em, "port_exec_valid", "o")
-            port_exec_ready_i = Logic(em, "port_exec_ready", "i")
+            port_exec_valid_o = self._add_port(Logic(em, "port_exec_valid", "o"))
+            port_exec_ready_i = self._add_port(Logic(em, "port_exec_ready", "i"))
 
-        wreq_valid_o = Logic   (em, "wreq_valid", "o")
-        wreq_ready_i = Logic   (em, "wreq_ready", "i")
-        wreq_id_o    = LogicVec(em, "wreq_id",    "o", self.configs.id_width)
-        wreq_addr_o  = LogicVec(em, "wreq_addr",  "o", self.configs.addr_width)
-        wreq_data_o  = LogicVec(em, "wreq_data",  "o", self.configs.data_width)
-
-        wresp_valid_i = Logic   (em, "wresp_valid", "i")
-        wresp_ready_o = Logic   (em, "wresp_ready", "o")
-        wresp_id_i    = LogicVec(em, "wresp_id",    "i", self.configs.id_width)
-
-        allow_alloc_i = Logic(em, "allow_alloc", "i")
-        allow_access_i = Logic(em, "allow_access", "i")
+        wreq_valid_o  = self._add_port(Logic   (em, "wreq_valid", "o"))
+        wreq_ready_i  = self._add_port(Logic   (em, "wreq_ready", "i"))
+        wreq_id_o     = self._add_port(LogicVec(em, "wreq_id",    "o", self.configs.id_width))
+        wreq_addr_o   = self._add_port(LogicVec(em, "wreq_addr",  "o", self.configs.addr_width))
+        wreq_data_o   = self._add_port(LogicVec(em, "wreq_data",  "o", self.configs.data_width))
+        wresp_valid_i = self._add_port(Logic   (em, "wresp_valid", "i"))
+        wresp_ready_o = self._add_port(Logic   (em, "wresp_ready", "o"))
+        wresp_id_i    = self._add_port(LogicVec(em, "wresp_id",    "i", self.configs.id_width))
+        allow_alloc_i  = self._add_port(Logic  (em, "allow_alloc",  "i"))
+        allow_access_i = self._add_port(Logic  (em, "allow_access", "i"))
 
         # Shared pointer infrastructure
         (q_done, q_issue, q_tail, q_head,
@@ -382,152 +381,62 @@ end
 
         self._write_to_file(em, path_rtl)
 
-    def instantiate(
-        self,
-        em: Emitter,
-        empty_o: Logic,
-        port_addr_i: LogicVec,
-        port_addr_valid_i: Logic,
-        port_addr_ready_o: Logic,
-        allow_alloc_i: Logic,
-        # Load-specific
-        port_data_o: LogicVec = None,
-        port_data_valid_o: Logic = None,
-        port_data_ready_i: Logic = None,
-        rreq_valid_o: Logic = None,
-        rreq_ready_i: Logic = None,
-        rreq_id_o: LogicVec = None,
-        rreq_addr_o: LogicVec = None,
-        rresp_valid_i: Logic = None,
-        rresp_ready_o: Logic = None,
-        rresp_id_i: LogicVec = None,
-        rresp_data_i: LogicVec = None,
-        allow_access_i: Logic = None,
-        # Store-specific
-        port_data_i: LogicVec = None,
-        port_data_valid_i: Logic = None,
-        port_data_ready_o: Logic = None,
-        wreq_valid_o: Logic = None,
-        wreq_ready_i: Logic = None,
-        wreq_id_o: LogicVec = None,
-        wreq_addr_o: LogicVec = None,
-        wreq_data_o: LogicVec = None,
-        wresp_valid_i: Logic = None,
-        wresp_ready_o: Logic = None,
-        wresp_id_i: LogicVec = None,
-        port_exec_valid_o: Logic = None,
-        port_exec_ready_i: Logic = None,
-        # Master interface (optional)
-        memStart_ready_o: Logic = None,
-        memStart_valid_i: Logic = None,
-        ctrlEnd_ready_o: Logic = None,
-        ctrlEnd_valid_i: Logic = None,
-        memEnd_ready_i: Logic = None,
-        memEnd_valid_o: Logic = None,
-    ) -> Emitter:
+    def instantiate(self, em: Emitter, signal_map: dict) -> Emitter:
         """
         Queue Instantiation
 
-        Creates the port mapping for the Queue entity (load or store variant).
-        The queue type is determined by self.configs.q_type.
+        Creates the port mapping for the Queue entity using the ports recorded
+        during generate(). Must be called after generate().
 
         Parameters:
-            em                  : Emitter for code generation
-            empty_o             : Output indicating the queue is empty
-            port_addr_i         : Input address from the kernel port
-            port_addr_valid_i   : Valid signal for the incoming address
-            port_addr_ready_o   : Ready signal back to the kernel port
-            allow_alloc_i       : Permission to allocate a new entry
-
-            Load-specific:
-            port_data_o         : Output data to the kernel port
-            port_data_valid_o   : Valid signal for the outgoing data
-            port_data_ready_i   : Ready signal from the kernel port
-            rreq_valid_o        : AXI read request valid
-            rreq_ready_i        : AXI read request ready
-            rreq_id_o           : AXI read request ID
-            rreq_addr_o         : AXI read request address
-            rresp_valid_i       : AXI read response valid
-            rresp_ready_o       : AXI read response ready
-            rresp_id_i          : AXI read response ID
-            rresp_data_i        : AXI read response data
-            allow_access_i        : Permission to retire (advance head) a load entry
-
-            Store-specific:
-            port_data_i         : Input data from the kernel port
-            port_data_valid_i   : Valid signal for the incoming data
-            port_data_ready_o   : Ready signal back to the kernel port
-            wreq_valid_o        : AXI write request valid
-            wreq_ready_i        : AXI write request ready
-            wreq_id_o           : AXI write request ID
-            wreq_addr_o         : AXI write request address
-            wreq_data_o         : AXI write request data
-            wresp_valid_i       : AXI write response valid
-            wresp_ready_o       : AXI write response ready
-            wresp_id_i          : AXI write response ID
-            allow_access_i       : Permission to retire (advance head) a store entry
-            port_exec_valid_o   : Store execution acknowledgement valid (if st_resp)
-            port_exec_ready_i   : Store execution acknowledgement ready (if st_resp)
-
-            Master interface (optional, only when self.configs.master is True):
-            memStart_ready_o    : Memory start handshake ready
-            memStart_valid_i    : Memory start handshake valid
-            ctrlEnd_ready_o     : Control end handshake ready
-            ctrlEnd_valid_i     : Control end handshake valid
-            memEnd_ready_i      : Memory end handshake ready
-            memEnd_valid_o      : Memory end handshake valid
+            em          : Emitter for the calling (top-level) module.
+            signal_map  : Dict mapping each entity port name to the corresponding
+                          external signal in the calling architecture. Keys are
+                          strings matching those in self.ports (e.g. "port_addr_i",
+                          "empty_o"). Values are Logic or LogicVec objects from the
+                          calling module — inputs are read via getNameRead(), outputs
+                          are written via getNameWrite().
 
         Returns:
             The emitter after the instantiation has been appended.
-        """
-        em.start_instantiation(self.module_name)
 
+        Example (load queue):
+            lq.instantiate(em, {
+                "empty_o":           lq_empty,
+                "port_addr_i":       lq_port_addr,
+                "port_addr_valid_i": lq_port_addr_valid,
+                "port_addr_ready_o": lq_port_addr_ready,
+                "port_data_o":       lq_port_data,
+                "port_data_valid_o": lq_port_data_valid,
+                "port_data_ready_i": lq_port_data_ready,
+                "rreq_valid_o":      lq_rreq_valid,
+                "rreq_ready_i":      lq_rreq_ready,
+                "rreq_id_o":         lq_rreq_id,
+                "rreq_addr_o":       lq_rreq_addr,
+                "rresp_valid_i":     lq_rresp_valid,
+                "rresp_ready_o":     lq_rresp_ready,
+                "rresp_id_i":        lq_rresp_id,
+                "rresp_data_i":      lq_rresp_data,
+                "allow_alloc_i":     lq_allow_alloc,
+                "allow_access_i":    lq_allow_access,
+            })
+
+        The set of required keys equals self.ports.keys(), which is populated
+        by generate() and includes optional ports (st_resp, master) only when
+        those features are enabled in configs.
+        """
+        assert self.ports, "instantiate() must be called after generate()"
+
+        em.start_instantiation(self.module_name)
         em.add_map("rst", "rst")
         em.add_map("clk", "clk")
 
-        em.add_map("empty_o",             empty_o.getNameWrite())
-        em.add_map("port_addr_i",         port_addr_i.getNameRead())
-        em.add_map("port_addr_valid_i",   port_addr_valid_i.getNameRead())
-        em.add_map("port_addr_ready_o",   port_addr_ready_o.getNameWrite())
-        em.add_map("allow_alloc_i",       allow_alloc_i.getNameRead())
-
-        if self.configs.q_type == "load":
-            em.add_map("port_data_o",       port_data_o.getNameWrite())
-            em.add_map("port_data_valid_o", port_data_valid_o.getNameWrite())
-            em.add_map("port_data_ready_i", port_data_ready_i.getNameRead())
-            em.add_map("rreq_valid_o",      rreq_valid_o.getNameWrite())
-            em.add_map("rreq_ready_i",      rreq_ready_i.getNameRead())
-            em.add_map("rreq_id_o",         rreq_id_o.getNameWrite())
-            em.add_map("rreq_addr_o",       rreq_addr_o.getNameWrite())
-            em.add_map("rresp_valid_i",     rresp_valid_i.getNameRead())
-            em.add_map("rresp_ready_o",     rresp_ready_o.getNameWrite())
-            em.add_map("rresp_id_i",        rresp_id_i.getNameRead())
-            em.add_map("rresp_data_i",      rresp_data_i.getNameRead())
-            em.add_map("allow_access_i",      allow_access_i.getNameRead())
-        elif self.configs.q_type == "store":
-            em.add_map("port_data_i",       port_data_i.getNameRead())
-            em.add_map("port_data_valid_i", port_data_valid_i.getNameRead())
-            em.add_map("port_data_ready_o", port_data_ready_o.getNameWrite())
-            em.add_map("wreq_valid_o",      wreq_valid_o.getNameWrite())
-            em.add_map("wreq_ready_i",      wreq_ready_i.getNameRead())
-            em.add_map("wreq_id_o",         wreq_id_o.getNameWrite())
-            em.add_map("wreq_addr_o",       wreq_addr_o.getNameWrite())
-            em.add_map("wreq_data_o",       wreq_data_o.getNameWrite())
-            em.add_map("wresp_valid_i",     wresp_valid_i.getNameRead())
-            em.add_map("wresp_ready_o",     wresp_ready_o.getNameWrite())
-            em.add_map("wresp_id_i",        wresp_id_i.getNameRead())
-            em.add_map("allow_access_i",     allow_access_i.getNameRead())
-            if self.configs.st_resp:
-                em.add_map("port_exec_valid_o", port_exec_valid_o.getNameWrite())
-                em.add_map("port_exec_ready_i", port_exec_ready_i.getNameRead())
-
-        if self.configs.master:
-            em.add_map("memStart_ready_o", memStart_ready_o.getNameWrite())
-            em.add_map("memStart_valid_i", memStart_valid_i.getNameRead())
-            em.add_map("ctrlEnd_ready_o",  ctrlEnd_ready_o.getNameWrite())
-            em.add_map("ctrlEnd_valid_i",  ctrlEnd_valid_i.getNameRead())
-            em.add_map("memEnd_ready_i",   memEnd_ready_i.getNameRead())
-            em.add_map("memEnd_valid_o",   memEnd_valid_o.getNameWrite())
+        for port_name, port_signal in self.ports.items():
+            ext = signal_map[port_name]
+            if port_signal.type == "i":
+                em.add_map(port_name, ext.getNameRead())
+            else:
+                em.add_map(port_name, ext.getNameWrite())
 
         em.complete_instantiation()
         return em
