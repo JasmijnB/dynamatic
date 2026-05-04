@@ -226,7 +226,7 @@ end
         rresp_data_i  = LogicVec(em, "rresp_data",  "i", self.configs.data_width)
 
         allow_alloc_i = Logic(em, "allow_alloc", "i")
-        allow_load_i  = Logic(em, "allow_load",  "i")
+        allow_access_i  = Logic(em, "allow_access",  "i")
 
         # Shared pointer infrastructure
         (q_done, q_issue, q_tail, q_head,
@@ -251,7 +251,7 @@ end
         em.add_assignment(alloc_en, port_addr_valid_i & can_alloc)
 
         # Retirement: head advances whenever the queue is non-empty and loads are allowed
-        em.add_assignment(load_en, ~q_empty & allow_load_i)
+        em.add_assignment(load_en, ~q_empty & allow_access_i)
 
         # Issue
         can_issue = self._setup_can_issue(
@@ -305,7 +305,7 @@ end
         wresp_id_i    = LogicVec(em, "wresp_id",    "i", self.configs.id_width)
 
         allow_alloc_i = Logic(em, "allow_alloc", "i")
-        allow_store_i = Logic(em, "allow_store", "i")
+        allow_access_i = Logic(em, "allow_access", "i")
 
         # Shared pointer infrastructure
         (q_done, q_issue, q_tail, q_head,
@@ -355,7 +355,7 @@ end
             (tail_addr_valid | alloc_addr_en) & (tail_data_valid | alloc_data_en))
 
         # Retirement: head advances when queue is non-empty and stores are allowed
-        em.add_assignment(load_en, ~q_empty & allow_store_i)
+        em.add_assignment(load_en, ~q_empty & allow_access_i)
 
         # Issue
         can_issue = self._setup_can_issue(
@@ -402,7 +402,7 @@ end
         rresp_ready_o: Logic = None,
         rresp_id_i: LogicVec = None,
         rresp_data_i: LogicVec = None,
-        allow_load_i: Logic = None,
+        allow_access_i: Logic = None,
         # Store-specific
         port_data_i: LogicVec = None,
         port_data_valid_i: Logic = None,
@@ -415,7 +415,6 @@ end
         wresp_valid_i: Logic = None,
         wresp_ready_o: Logic = None,
         wresp_id_i: LogicVec = None,
-        allow_store_i: Logic = None,
         port_exec_valid_o: Logic = None,
         port_exec_ready_i: Logic = None,
         # Master interface (optional)
@@ -452,7 +451,7 @@ end
             rresp_ready_o       : AXI read response ready
             rresp_id_i          : AXI read response ID
             rresp_data_i        : AXI read response data
-            allow_load_i        : Permission to retire (advance head) a load entry
+            allow_access_i        : Permission to retire (advance head) a load entry
 
             Store-specific:
             port_data_i         : Input data from the kernel port
@@ -466,7 +465,7 @@ end
             wresp_valid_i       : AXI write response valid
             wresp_ready_o       : AXI write response ready
             wresp_id_i          : AXI write response ID
-            allow_store_i       : Permission to retire (advance head) a store entry
+            allow_access_i       : Permission to retire (advance head) a store entry
             port_exec_valid_o   : Store execution acknowledgement valid (if st_resp)
             port_exec_ready_i   : Store execution acknowledgement ready (if st_resp)
 
@@ -504,7 +503,7 @@ end
             em.add_map("rresp_ready_o",     rresp_ready_o.getNameWrite())
             em.add_map("rresp_id_i",        rresp_id_i.getNameRead())
             em.add_map("rresp_data_i",      rresp_data_i.getNameRead())
-            em.add_map("allow_load_i",      allow_load_i.getNameRead())
+            em.add_map("allow_access_i",      allow_access_i.getNameRead())
         elif self.configs.q_type == "store":
             em.add_map("port_data_i",       port_data_i.getNameRead())
             em.add_map("port_data_valid_i", port_data_valid_i.getNameRead())
@@ -517,7 +516,7 @@ end
             em.add_map("wresp_valid_i",     wresp_valid_i.getNameRead())
             em.add_map("wresp_ready_o",     wresp_ready_o.getNameWrite())
             em.add_map("wresp_id_i",        wresp_id_i.getNameRead())
-            em.add_map("allow_store_i",     allow_store_i.getNameRead())
+            em.add_map("allow_access_i",     allow_access_i.getNameRead())
             if self.configs.st_resp:
                 em.add_map("port_exec_valid_o", port_exec_valid_o.getNameWrite())
                 em.add_map("port_exec_ready_i", port_exec_ready_i.getNameRead())

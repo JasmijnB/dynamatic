@@ -48,7 +48,7 @@ logic [ID_W-1:0]   wresp_id_i;
 
 // Dependency checker
 logic allow_alloc_i;
-logic allow_store_i;
+logic allow_access_i;
 
 // ===----------------------------------------------------------------------===
 // DUT instantiation
@@ -72,7 +72,7 @@ store_queue dut (
     .wresp_ready_o     (wresp_ready_o),
     .wresp_id_i        (wresp_id_i),
     .allow_alloc_i     (allow_alloc_i),
-    .allow_store_i     (allow_store_i)
+    .allow_access_i     (allow_access_i)
 );
 
 // ===----------------------------------------------------------------------===
@@ -169,7 +169,7 @@ task automatic reset();
     wresp_valid_i     = 0;
     wresp_id_i        = '0;
     allow_alloc_i     = 1;
-    allow_store_i     = 1;
+    allow_access_i     = 1;
     repeat (3) tick();
     rst = 0;
     tick();
@@ -278,7 +278,7 @@ initial begin
     test_counter = 6;
     reset();
     wreq_ready_i  = 0;
-    allow_store_i = 0;
+    allow_access_i = 0;
     port_send_store(32'hF001_0001, 32'hF001_F001);
     port_send_store(32'hF001_0002, 32'hF001_F002);
     port_send_store(32'hF001_0003, 32'hF001_F003);
@@ -287,7 +287,7 @@ initial begin
     check(port_addr_ready_o, 0, "T6: addr not ready when full");
     check(port_data_ready_o, 0, "T6: data not ready when full");
     check(empty_o,           0, "T6: not empty when full");
-    allow_store_i = 1;
+    allow_access_i = 1;
     // Drain the queue
     fork
         begin
@@ -299,17 +299,17 @@ initial begin
     join
 
     // ------------------------------------------------------------------
-    // TEST 7: allow_store_i = 0 blocks issue
+    // TEST 7: allow_access_i = 0 blocks issue
     // ------------------------------------------------------------------
     test_counter = 7;
     reset();
-    allow_store_i = 0;
+    allow_access_i = 0;
     fork
         port_send_store(32'hEEEE_0001, 32'hEEEE_EEEE);
         begin
             tick();
             check(wreq_valid_o, 0, "T7: no wreq when allow_store=0");
-            allow_store_i = 1;
+            allow_access_i = 1;
             tick();
             check(wreq_valid_o, 1, "T7: wreq fires after allow_store=1");
             axi_respond(32'hEEEE_0001, 32'hEEEE_EEEE);

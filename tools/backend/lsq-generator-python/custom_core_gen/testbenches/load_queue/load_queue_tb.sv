@@ -48,7 +48,7 @@ logic [DATA_W-1:0]    rresp_data_i;
 
 // Dependency checker
 logic                 allow_alloc_i;
-logic                 allow_load_i;
+logic                 allow_access_i;
 
 // ===----------------------------------------------------------------------===
 // DUT instantiation
@@ -72,7 +72,7 @@ load_queue dut (
     .rresp_id_i       (rresp_id_i),
     .rresp_data_i     (rresp_data_i),
     .allow_alloc_i    (allow_alloc_i),
-    .allow_load_i     (allow_load_i)
+    .allow_access_i     (allow_access_i)
 );
 
 // ===----------------------------------------------------------------------===
@@ -150,7 +150,7 @@ task automatic reset();
     rresp_id_i       = '0;
     rresp_data_i     = '0;
     allow_alloc_i    = 1;
-    allow_load_i     = 1;
+    allow_access_i     = 1;
     repeat (3) tick();
     rst = 0;
     tick();
@@ -299,7 +299,7 @@ initial begin
     test_counter = 7;
     reset();
     rreq_ready_i = 0;
-    allow_load_i = 0;
+    allow_access_i = 0;
     port_send_addr(32'hF001_0001);
     port_send_addr(32'hF001_0002);
     port_send_addr(32'hF001_0003);
@@ -307,7 +307,7 @@ initial begin
     tick();
     check(port_addr_ready_o, 0, "T7: not ready when full");
     check(empty_o,          0, "T7: not empty when full");
-    allow_load_i = 1;
+    allow_access_i = 1;
 
     // ------------------------------------------------------------------
     // TEST 8: Response with wrong ID is ignored
@@ -447,7 +447,7 @@ initial begin
     reset();
     begin
         logic [DATA_W-1:0] d0, d1, d2, d3;
-        allow_load_i = 0;
+        allow_access_i = 0;
         fork
             begin
                 port_send_addr(32'hAAAA_0001);
@@ -456,7 +456,7 @@ initial begin
                 port_send_addr(32'hAAAA_0004);
                 $display("T7: sent 4 addresses to fill the queue");
                 check(port_addr_ready_o, 0, "T7: not ready when no loads are allowed");
-                allow_load_i = 1;
+                allow_access_i = 1;
             end
             begin
                 axi_respond(32'hAAAA_0001, 32'h1111_0001);
