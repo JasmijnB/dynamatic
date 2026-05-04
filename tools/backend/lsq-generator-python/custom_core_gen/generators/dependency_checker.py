@@ -79,8 +79,6 @@ class DependencyChecker:
         
         tail_position = LogicVec(em, "alloc_disparity", "w", self.configs.tail_position_width)                
         access_disparity = LogicVec(em, "access_disparity", "w", self.configs.access_disparity_width, is_signed=True)
-        signed = lambda x: CustomStatement(f"signed({x})", f"$signed({x})")
-        signed_access_disparity = signed("access_disparity")
         
         conflict = Logic(em, "no_conflict", "w")
         
