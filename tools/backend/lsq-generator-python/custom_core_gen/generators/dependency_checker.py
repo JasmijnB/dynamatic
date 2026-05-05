@@ -3,60 +3,14 @@ from core_gen.signals import *
 from core_gen.operators import CyclicRightShift, MuxLookUp, Reduce
 from core_gen.ir import BinOp, Bin, Val, Bit, CustomStatement, Type
 from custom_core_gen.configs import DependencyCheckerConfig
+from custom_core_gen.generators.generator import Generator
 
 
-class DependencyChecker:
+class DependencyChecker(Generator):
     def __init__(self, name: str, suffix: str, configs: DependencyCheckerConfig):
-        """
-        LoadQueue
+        super().__init__(name, suffix, configs)
 
-        Models the top-level Load Queue (LQ) module with a single load port and
-        single AXI read channel.
-
-        This class integrates the core load queue logic without a store queue,
-        dependency checking, dispatcher submodules, group allocator, or pipeline
-        stages (pipe0/pipe1/pipeComp are not supported).
-
-        Entries are allocated directly when a load address arrives from the kernel:
-        on the port_addr handshake, the entry at q_tail is allocated and the
-        address is written into it in a single cycle.
-
-        Parameters:
-            name    : Base name of the LQ. "<name saved in configs>_core"
-            suffix  : Suffix appended to the name to form the VHDL entity name.
-            configs : configuration generated from JSON
-
-        Instance Variable:
-            self.module_name = name + suffix : Entity and architecture identifier
-
-        Example:
-            lq_core = LoadQueue("config_0_core", '', configs)
-            lq_corVal(0)e.generate(...)
-
-        """
-
-        self.name = name
-        self.module_name = name + suffix
-        self.configs = configs
-        self.ports: dict[str, Logic | LogicVec | LogicVecArray] = {}
-
-    def _add_port(self, signal: Logic | LogicVec | LogicVecArray) -> Logic | LogicVec | LogicVecArray:
-        """Register a port signal so instantiate() can use it later.
-
-        For LogicVecArray the key is "<name>_<dir>" (e.g. "pq_addr_i") because
-        getNameRead/Write on an array requires an index. For scalar signals the
-        key is derived from getNameRead / getNameWrite as usual.
-        """
-        if isinstance(signal, LogicVecArray):
-            key = f"{signal.name}_{signal.type}"
-        elif signal.type == "i":
-            key = signal.getNameRead()
-        else:
-            key = signal.getNameWrite()
-        self.ports[key] = signal
-        return signal
-
-    def generate(self, em: Emitter, lsq_submodules, path_rtl) -> None:
+    def generate(self, em: Emitter, path_rtl) -> None:
         """
         Generates the VHDL 'entity' and 'architecture' sections for a Load Queue.
 
@@ -135,65 +89,4 @@ class DependencyChecker:
         # TODO: Implement this
         # issue with this: Done is a different number than send, so would need to keep track of a separate disparity between sends of P and accesses of S, if sends max out then already stop, however increases complexity :(
 
-        # Write to the file
-        output_str = em.get_definition_str(self.module_name)
-        with open(f"{path_rtl}/{self.name}.{em.get_file_suffix()}", "a") as file:
-            file.write(output_str)
-
-    def instantiate(self, em: Emitter, signal_map: dict) -> Emitter:
-        """
-        Dependency Checker Instantiation
-
-        Creates the port mapping for the DependencyChecker entity using the ports
-        recorded during generate(). Must be called after generate().
-
-        Parameters:
-            em          : Emitter for the calling (top-level) module.
-            signal_map  : Dict mapping each port key to the corresponding external
-                          signal in the calling architecture. Keys match self.ports
-                          (scalar ports use the entity port name, e.g. "pq_done_i";
-                          array ports use "<name>_<dir>", e.g. "pq_addr_i"). Values
-                          are Logic, LogicVec, or LogicVecArray objects from the
-                          calling module.
-
-        Returns:
-            The emitter after the instantiation has been appended.
-
-        Example:
-            dep_checker.instantiate(em, {
-                "pq_addr_i":         lq_q_addr,       # LogicVecArray
-                "pq_done_i":         lq_q_done,
-                "pq_send_en_i":      lq_done_en,
-                "pq_alloc_en_i":     lq_alloc_en,
-                "sq_addr_i":         sq_q_addr,       # LogicVecArray
-                "sq_tail_i":         sq_q_tail,
-                "sq_head_i":         sq_q_head,
-                "sq_access_en_i":    sq_load_en,
-                "allow_pq_alloc_o":  lq_allow_alloc,
-                "allow_sq_access_o": sq_allow_access,
-            })
-
-        The set of required keys equals self.ports.keys(), which is populated
-        by generate().
-        """
-        assert self.ports, "instantiate() must be called after generate()"
-
-        em.start_instantiation(self.module_name)
-        em.add_map("rst", "rst")
-        em.add_map("clk", "clk")
-
-        for port_name, port_signal in self.ports.items():
-            ext = signal_map[port_name]
-            if isinstance(port_signal, LogicVecArray):
-                for i in range(port_signal.length):
-                    if port_signal.type == "i":
-                        em.add_map(port_signal.getNameRead(i), ext.getNameRead(i))
-                    else:
-                        em.add_map(port_signal.getNameWrite(i), ext.getNameWrite(i))
-            elif port_signal.type == "i":
-                em.add_map(port_name, ext.getNameRead())
-            else:
-                em.add_map(port_name, ext.getNameWrite())
-
-        em.complete_instantiation()
-        return em
+        self._write_to_file(em, path_rtl)

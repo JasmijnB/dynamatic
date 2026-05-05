@@ -27,6 +27,6 @@
         "pipeCompEn": false,
         "master": false
     },
-    "HeadPositionWidth": 2,
+    "TailOffsetWidth": 2,
     "AccessDisparityWidth": 2
 }

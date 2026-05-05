@@ -53,13 +53,13 @@ class QueueConfig:
 class DependencyCheckerConfig:
     pq: QueueConfig
     sq: QueueConfig
-    tail_position_width: int = 2 
+    tail_offset_width: int = 2 
     access_disparity_width: int = 2
 
     def __init__(self, config: dict):
         self.pq = QueueConfig(config["PQConfig"])
         self.sq = QueueConfig(config["SQConfig"])
-        self.tail_position_width = config.get("HeadPositionWidth", 2)
+        self.tail_offset_width = config.get("TailOffsetWidth", 3)
         self.access_disparity_width = config.get("AccessDisparityWidth", 2)
 
     @staticmethod

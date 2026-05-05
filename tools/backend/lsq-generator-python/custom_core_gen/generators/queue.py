@@ -4,31 +4,12 @@ from core_gen.operators import *
 from core_gen.configs import Configs
 from core_gen.ir import BinOp, Bin, Val, Bit, CustomStatement, reduce_bin
 from core_gen.utils import isPow2
+from custom_core_gen.generators.generator import Generator
 
 
-class Queue:
+class Queue(Generator):
     def __init__(self, name: str, suffix: str, configs: Configs):
-        self.name = name
-        self.module_name = name + suffix
-        self.configs = configs
-        self.ports: dict[str, Logic | LogicVec] = {}
-
-
-    def _add_port(self, signal: Logic | LogicVec | LogicVecArray) -> Logic | LogicVec | LogicVecArray:
-        """Register a port signal so instantiate() can use it later.
-
-        For LogicVecArray the key is "<name>_<dir>" (e.g. "pq_addr_i") because
-        getNameRead/Write on an array requires an index. For scalar signals the
-        key is derived from getNameRead / getNameWrite as usual.
-        """
-        if isinstance(signal, LogicVecArray):
-            key = f"{signal.name}_{signal.type}"
-        elif signal.type == "i":
-            key = signal.getNameRead()
-        else:
-            key = signal.getNameWrite()
-        self.ports[key] = signal
-        return signal
+        super().__init__(name, suffix, configs)
 
 
     def generate(self, em: Emitter, lsq_submodules, path_rtl) -> None:
@@ -222,7 +203,7 @@ end
         use_bit_flip = isPow2(self.configs.num_entries)
 
         q_addr_out_o = self._add_port(
-            LogicVecArray(em, "q_addr_out", "o", self.configs.num_entries, self.configs.addr_width))
+            LogicVecArray(em, "q_addr", "o", self.configs.num_entries, self.configs.addr_width))
         for i in range(self.configs.num_entries):
             em.add_assignment(q_addr_out_o[i], q_addr[i])
 
@@ -429,69 +410,3 @@ end
             self._generate_master_interface(em, q_empty)
 
         self._write_to_file(em, path_rtl)
-
-    def instantiate(self, em: Emitter, signal_map: dict) -> Emitter:
-        """
-        Queue Instantiation
-
-        Creates the port mapping for the Queue entity using the ports recorded
-        during generate(). Must be called after generate().
-
-        Parameters:
-            em          : Emitter for the calling (top-level) module.
-            signal_map  : Dict mapping each entity port name to the corresponding
-                          external signal in the calling architecture. Keys are
-                          strings matching those in self.ports (e.g. "port_addr_i",
-                          "empty_o"). Values are Logic or LogicVec objects from the
-                          calling module — inputs are read via getNameRead(), outputs
-                          are written via getNameWrite().
-
-        Returns:
-            The emitter after the instantiation has been appended.
-
-        Example (load queue):
-            lq.instantiate(em, {
-                "empty_o":           lq_empty,
-                "port_addr_i":       lq_port_addr,
-                "port_addr_valid_i": lq_port_addr_valid,
-                "port_addr_ready_o": lq_port_addr_ready,
-                "port_data_o":       lq_port_data,
-                "port_data_valid_o": lq_port_data_valid,
-                "port_data_ready_i": lq_port_data_ready,
-                "rreq_valid_o":      lq_rreq_valid,
-                "rreq_ready_i":      lq_rreq_ready,
-                "rreq_id_o":         lq_rreq_id,
-                "rreq_addr_o":       lq_rreq_addr,
-                "rresp_valid_i":     lq_rresp_valid,
-                "rresp_ready_o":     lq_rresp_ready,
-                "rresp_id_i":        lq_rresp_id,
-                "rresp_data_i":      lq_rresp_data,
-                "allow_alloc_i":     lq_allow_alloc,
-                "allow_access_i":    lq_allow_access,
-            })
-
-        The set of required keys equals self.ports.keys(), which is populated
-        by generate() and includes optional ports (st_resp, master) only when
-        those features are enabled in configs.
-        """
-        assert self.ports, "instantiate() must be called after generate()"
-
-        em.start_instantiation(self.module_name)
-        em.add_map("rst", "rst")
-        em.add_map("clk", "clk")
-
-        for port_name, port_signal in self.ports.items():
-            ext = signal_map[port_name]
-            if isinstance(port_signal, LogicVecArray):
-                for i in range(port_signal.length):
-                    if port_signal.type == "i":
-                        em.add_map(port_signal.getNameRead(i), ext.getNameRead(i))
-                    else:
-                        em.add_map(port_signal.getNameWrite(i), ext.getNameWrite(i))
-            elif port_signal.type == "i":
-                em.add_map(port_name, ext.getNameRead())
-            else:
-                em.add_map(port_name, ext.getNameWrite())
-
-        em.complete_instantiation()
-        return em
