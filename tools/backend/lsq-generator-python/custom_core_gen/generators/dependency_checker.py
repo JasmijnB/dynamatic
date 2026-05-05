@@ -107,12 +107,12 @@ class DependencyChecker:
             em.add_assignment((ones, i), Bit(1).when(Val(str(i)) <= access_disparity).else_(Bit(0)))
         CyclicRightShift(em, check_mask, ones, pq_done_i)
 
-        head_address = LogicVec(em, "head_address", "w", self.configs.sq.addr_width)
-        MuxLookUp(em, head_address, sq_addr_i, sq_head_i)
+        tail_address = LogicVec(em, "tail_address", "w", self.configs.sq.addr_width)
+        MuxLookUp(em, tail_address, sq_addr_i, sq_head_i)
 
         conflicts = LogicVec(em, "conflicts", "w", self.configs.pq.num_entries)
         for i in range(self.configs.pq.num_entries):
-            em.add_assignment((conflicts, i), Val(check_mask, i) & (Val(pq_addr_i, i) == head_address))
+            em.add_assignment((conflicts, i), Val(check_mask, i) & (Val(pq_addr_i, i) == tail_address))
 
         Reduce(em, conflict, conflicts, BinOp.OR)
 
