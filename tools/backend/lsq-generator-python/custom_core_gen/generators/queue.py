@@ -13,11 +13,23 @@ class Queue:
         self.configs = configs
         self.ports: dict[str, Logic | LogicVec] = {}
 
-    def _add_port(self, signal: Logic | LogicVec) -> Logic | LogicVec:
-        """Register a port signal so instantiate() can use it later."""
-        name = signal.getNameRead() if signal.type == "i" else signal.getNameWrite()
-        self.ports[name] = signal
+
+    def _add_port(self, signal: Logic | LogicVec | LogicVecArray) -> Logic | LogicVec | LogicVecArray:
+        """Register a port signal so instantiate() can use it later.
+
+        For LogicVecArray the key is "<name>_<dir>" (e.g. "pq_addr_i") because
+        getNameRead/Write on an array requires an index. For scalar signals the
+        key is derived from getNameRead / getNameWrite as usual.
+        """
+        if isinstance(signal, LogicVecArray):
+            key = f"{signal.name}_{signal.type}"
+        elif signal.type == "i":
+            key = signal.getNameRead()
+        else:
+            key = signal.getNameWrite()
+        self.ports[key] = signal
         return signal
+
 
     def generate(self, em: Emitter, lsq_submodules, path_rtl) -> None:
         self.ports.clear()
@@ -202,6 +214,39 @@ end
         em.add_assignment(issue_en, can_issue & axi_ready_i)
         return can_issue
 
+    def _generate_observable_ports(self, em: Emitter, q_addr,
+                                    q_done, q_tail, q_head,
+                                    done_en, alloc_en, load_en) -> None:
+        """Add output ports that expose internal queue state for observation."""
+        n = self.configs.q_addr_width
+        use_bit_flip = isPow2(self.configs.num_entries)
+
+        q_addr_out_o = self._add_port(
+            LogicVecArray(em, "q_addr_out", "o", self.configs.num_entries, self.configs.addr_width))
+        for i in range(self.configs.num_entries):
+            em.add_assignment(q_addr_out_o[i], q_addr[i])
+
+        done_ptr_o  = self._add_port(LogicVec(em, "done_ptr",  "o", n))
+        alloc_ptr_o = self._add_port(LogicVec(em, "alloc_ptr", "o", n))
+        head_ptr_o  = self._add_port(LogicVec(em, "head_ptr",  "o", n))
+
+        if use_bit_flip:
+            em.add_assignment(done_ptr_o,  Val(em.slice_var(q_done.getNameRead(), n - 1, 0)))
+            em.add_assignment(alloc_ptr_o, Val(em.slice_var(q_tail.getNameRead(), n - 1, 0)))
+            em.add_assignment(head_ptr_o,  Val(em.slice_var(q_head.getNameRead(), n - 1, 0)))
+        else:
+            em.add_assignment(done_ptr_o,  q_done)
+            em.add_assignment(alloc_ptr_o, q_tail)
+            em.add_assignment(head_ptr_o,  q_head)
+
+        done_en_o   = self._add_port(Logic(em, "done_en",   "o"))
+        alloc_en_o  = self._add_port(Logic(em, "alloc_en",  "o"))
+        access_en_o = self._add_port(Logic(em, "access_en", "o"))
+
+        em.add_assignment(done_en_o,   done_en)
+        em.add_assignment(alloc_en_o,  alloc_en)
+        em.add_assignment(access_en_o, load_en)
+
     def _write_to_file(self, em: Emitter, path_rtl: str):
         output_str = em.get_definition_str(self.module_name)
         with open(f"{path_rtl}/{self.name}.{em.get_file_suffix()}", "a") as file:
@@ -271,6 +316,8 @@ end
         em.add_assignment(port_data_valid_o,
             rresp_valid_i & (rresp_id_i == Val(self.configs.id_val)))
         em.add_assignment(done_en, rresp_valid_i & (rresp_id_i == Val(self.configs.id_val) & port_data_ready_i))
+
+        self._generate_observable_ports(em, q_addr, q_done, q_tail, q_head, done_en, alloc_en, load_en)
 
         if self.configs.master:
             self._generate_master_interface(em, q_empty)
@@ -376,6 +423,8 @@ end
             em.add_assignment(wresp_ready_o, Val(1))
             em.add_assignment(done_en, wresp_valid_i & (wresp_id_i == Val(self.configs.id_val)))
 
+        self._generate_observable_ports(em, q_addr, q_done, q_tail, q_head, done_en, alloc_en, load_en)
+
         if self.configs.master:
             self._generate_master_interface(em, q_empty)
 
@@ -433,7 +482,13 @@ end
 
         for port_name, port_signal in self.ports.items():
             ext = signal_map[port_name]
-            if port_signal.type == "i":
+            if isinstance(port_signal, LogicVecArray):
+                for i in range(port_signal.length):
+                    if port_signal.type == "i":
+                        em.add_map(port_signal.getNameRead(i), ext.getNameRead(i))
+                    else:
+                        em.add_map(port_signal.getNameWrite(i), ext.getNameWrite(i))
+            elif port_signal.type == "i":
                 em.add_map(port_name, ext.getNameRead())
             else:
                 em.add_map(port_name, ext.getNameWrite())
