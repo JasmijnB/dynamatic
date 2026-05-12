@@ -35,7 +35,7 @@ class Generator:
             raise ValueError("Ports have not been generated yet. Call generate() before get_ports().")
         return self.ports
 
-    def instantiate(self, em: Emitter, signal_map: dict) -> Emitter:
+    def instantiate(self, em: Emitter, signal_map: dict, instance_name: str = None) -> Emitter:
         """Wire this module into a parent by mapping each port to an external signal.
 
         Must be called after generate(). Keys in signal_map must match self.ports.keys().
@@ -43,8 +43,10 @@ class Generator:
         full port name (e.g. "pq_done_i", "allow_pq_alloc_o").
         """
         assert self.ports, "instantiate() must be called after generate()"
+        if instance_name is None:
+            instance_name = self.module_name
 
-        em.start_instantiation(self.module_name)
+        em.start_instantiation(self.module_name, instance_name)
         em.add_map("rst", "rst")
         em.add_map("clk", "clk")
 

@@ -79,7 +79,7 @@ class QueueInstance():
 
             port_signals[port_name] = out
                 
-        self.q_def.instantiate(em, port_signals)
+        self.q_def.instantiate(em, port_signals, f"queue_{self.num}_{self.q_type}")
             
 
 class DependencyCheckerInstance():
