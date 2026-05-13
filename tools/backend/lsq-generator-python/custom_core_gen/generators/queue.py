@@ -18,38 +18,34 @@ class Queue(Generator):
 
         # IOs - common
         empty_o           = self._add_port(Logic   (em, "empty",          "o"))
-        port_addr_i       = self._add_port(LogicVec(em, "port_addr",       "i", self.configs.addr_width))
-        port_addr_valid_i = self._add_port(Logic   (em, "port_addr_valid", "i"))
-        port_addr_ready_o = self._add_port(Logic   (em, "port_addr_ready", "o"))
+        circ_addr_i       = self._add_port(LogicVec(em, "circ_addr",      "i", self.configs.addr_width))
+        circ_addr_valid_i = self._add_port(Logic   (em, "circ_addr_valid", "i"))
+        circ_addr_ready_o = self._add_port(Logic   (em, "circ_addr_ready", "o"))
+
+        mem_addr_valid_o  = self._add_port(Logic   (em, "mem_addr_valid",  "o"))
+        mem_addr_ready_i  = self._add_port(Logic   (em, "mem_addr_ready",  "i"))
+        mem_addr_o        = self._add_port(LogicVec(em, "mem_addr",        "o", self.configs.addr_width))
 
         # IOs - type-specific
         if is_store:
-            port_data_i       = self._add_port(LogicVec(em, "port_data",       "i", self.configs.data_width))
-            port_data_valid_i = self._add_port(Logic   (em, "port_data_valid", "i"))
-            port_data_ready_o = self._add_port(Logic   (em, "port_data_ready", "o"))
+            circ_data_i       = self._add_port(LogicVec(em, "circ_data",       "i", self.configs.data_width))
+            circ_data_valid_i = self._add_port(Logic   (em, "circ_data_valid", "i"))
+            circ_data_ready_o = self._add_port(Logic   (em, "circ_data_ready", "o"))
+            mem_data_o        = self._add_port(LogicVec(em, "mem_data",        "o", self.configs.data_width))
+            mem_data_valid_o  = self._add_port(Logic   (em, "mem_data_valid",  "o"))
+            mem_data_ready_i  = self._add_port(Logic   (em, "mem_data_ready",  "i"))
+            mem_exec_valid_i  = self._add_port(Logic(em, "mem_exec_valid",  "i"))
+            mem_exec_ready_o  = self._add_port(Logic(em, "mem_exec_ready",  "o"))
             if self.configs.st_resp:
-                port_exec_valid_o = self._add_port(Logic(em, "port_exec_valid", "o"))
-                port_exec_ready_i = self._add_port(Logic(em, "port_exec_ready", "i"))
-            wreq_valid_o  = self._add_port(Logic   (em, "wreq_valid", "o"))
-            wreq_ready_i  = self._add_port(Logic   (em, "wreq_ready", "i"))
-            wreq_id_o     = self._add_port(LogicVec(em, "wreq_id",    "o", self.configs.id_width))
-            wreq_addr_o   = self._add_port(LogicVec(em, "wreq_addr",  "o", self.configs.addr_width))
-            wreq_data_o   = self._add_port(LogicVec(em, "wreq_data",  "o", self.configs.data_width))
-            wresp_valid_i = self._add_port(Logic   (em, "wresp_valid", "i"))
-            wresp_ready_o = self._add_port(Logic   (em, "wresp_ready", "o"))
-            wresp_id_i    = self._add_port(LogicVec(em, "wresp_id",    "i", self.configs.id_width))
+                circ_exec_valid_o = self._add_port(Logic(em, "circ_exec_valid", "o"))
+                circ_exec_ready_i = self._add_port(Logic(em, "circ_exec_ready", "i"))
         else:
-            port_data_o       = self._add_port(LogicVec(em, "port_data",       "o", self.configs.data_width))
-            port_data_valid_o = self._add_port(Logic   (em, "port_data_valid", "o"))
-            port_data_ready_i = self._add_port(Logic   (em, "port_data_ready", "i"))
-            rreq_valid_o  = self._add_port(Logic   (em, "rreq_valid", "o"))
-            rreq_ready_i  = self._add_port(Logic   (em, "rreq_ready", "i"))
-            rreq_id_o     = self._add_port(LogicVec(em, "rreq_id",    "o", self.configs.id_width))
-            rreq_addr_o   = self._add_port(LogicVec(em, "rreq_addr",  "o", self.configs.addr_width))
-            rresp_valid_i = self._add_port(Logic   (em, "rresp_valid", "i"))
-            rresp_ready_o = self._add_port(Logic   (em, "rresp_ready", "o"))
-            rresp_id_i    = self._add_port(LogicVec(em, "rresp_id",    "i", self.configs.id_width))
-            rresp_data_i  = self._add_port(LogicVec(em, "rresp_data",  "i", self.configs.data_width))
+            mem_data_valid_i  = self._add_port(Logic   (em, "mem_data_valid",  "i"))
+            mem_data_ready_o  = self._add_port(Logic   (em, "mem_data_ready",  "o"))
+            mem_data_i        = self._add_port(LogicVec(em, "mem_data",        "i", self.configs.data_width))
+            circ_data_o       = self._add_port(LogicVec(em, "circ_data",       "o", self.configs.data_width))
+            circ_data_valid_o = self._add_port(Logic   (em, "circ_data_valid", "o"))
+            circ_data_ready_i = self._add_port(Logic   (em, "circ_data_ready", "i"))
 
         allow_alloc_i  = self._add_port(Logic(em, "allow_alloc",  "i"))
         allow_access_i = self._add_port(Logic(em, "allow_access", "i"))
@@ -65,7 +61,7 @@ class Queue(Generator):
         q_addr = LogicVecArray(em, "q_addr", "r", self.configs.num_entries, self.configs.addr_width)
         for i in range(self.configs.num_entries):
             em.add_assignment(q_addr[i],
-                port_addr_i.when(Val(q_tail_oh, i) & alloc_en).else_(q_addr[i]))
+                circ_addr_i.when(Val(q_tail_oh, i) & alloc_en).else_(q_addr[i]))
         q_addr.regInit()
 
         em.add_assignment(empty_o, q_empty)
@@ -73,48 +69,36 @@ class Queue(Generator):
         # Allocation
         can_alloc = Logic(em, "can_alloc", "w")
         em.add_assignment(can_alloc, ~q_full & allow_alloc_i)
-        em.add_assignment(port_addr_ready_o, can_alloc)
-        em.add_assignment(alloc_en, port_addr_valid_i & can_alloc)
+        em.add_assignment(circ_addr_ready_o, can_alloc)
+        em.add_assignment(alloc_en, circ_addr_valid_i & can_alloc)
 
         # Retirement
         em.add_assignment(load_en, ~q_empty & allow_access_i)
 
-        # Issue — for store, gate on data validity so the pointer only advances on a real transfer
-        if is_store:
-            issue_ready = Logic(em, "issue_ready", "w")
-            em.add_assignment(issue_ready, wreq_ready_i & port_data_valid_i)
-            can_issue = self._setup_can_issue(
-                em, q_issue, q_head, q_full_w_issue, load_en, issue_en, issue_ready)
-        else:
-            can_issue = self._setup_can_issue(
-                em, q_issue, q_head, q_full_w_issue, load_en, issue_en, rreq_ready_i)
+        # Issue
+        can_issue = self._setup_can_issue(
+            em, q_issue, q_head, q_full_w_issue, load_en, issue_en, mem_addr_ready_i)
+        em.add_assignment(mem_addr_valid_o, can_issue)
 
-        # AXI request / response
+        MuxLookUp(em, mem_addr_o, q_addr, q_issue_sel)
+
         if is_store:
-            em.add_assignment(wreq_id_o,    Val(self.configs.id_val))
-            em.add_assignment(wreq_valid_o, can_issue & port_data_valid_i)
-            MuxLookUp(em, wreq_addr_o, q_addr, q_issue_sel)
-            em.add_assignment(wreq_data_o,       port_data_i)
-            em.add_assignment(port_data_ready_o, wreq_ready_i & can_issue)
+            em.add_assignment(mem_data_o,        circ_data_i)
+            em.add_assignment(mem_data_valid_o,  circ_data_valid_i)
+            em.add_assignment(circ_data_ready_o, mem_data_ready_i)
 
             if self.configs.st_resp:
-                em.add_assignment(port_exec_valid_o,
-                    wresp_valid_i & (wresp_id_i == Val(self.configs.id_val)))
-                em.add_assignment(wresp_ready_o, port_exec_ready_i)
-                em.add_assignment(done_en, wresp_valid_i & (wresp_id_i == Val(self.configs.id_val) & port_exec_ready_i))
+                em.add_assignment(circ_exec_valid_o, mem_exec_valid_i)
+                em.add_assignment(mem_exec_ready_o,  circ_exec_ready_i)
+                em.add_assignment(done_en, mem_exec_valid_i & circ_exec_ready_i)
             else:
-                em.add_assignment(wresp_ready_o, Val(1))
-                em.add_assignment(done_en, wresp_valid_i & (wresp_id_i == Val(self.configs.id_val)))
+                em.add_assignment(mem_exec_ready_o, Val(1))
+                em.add_assignment(done_en, mem_exec_valid_i)
         else:
-            em.add_assignment(rreq_id_o,    Val(self.configs.id_val))
-            em.add_assignment(rreq_valid_o, can_issue)
-            MuxLookUp(em, rreq_addr_o, q_addr, q_issue_sel)
-
-            em.add_assignment(rresp_ready_o,    port_data_ready_i)
-            em.add_assignment(port_data_o,      rresp_data_i)
-            em.add_assignment(port_data_valid_o,
-                rresp_valid_i & (rresp_id_i == Val(self.configs.id_val)))
-            em.add_assignment(done_en, rresp_valid_i & (rresp_id_i == Val(self.configs.id_val) & port_data_ready_i))
+            em.add_assignment(mem_data_ready_o,   circ_data_ready_i)
+            em.add_assignment(circ_data_o,         mem_data_i)
+            em.add_assignment(circ_data_valid_o,   mem_data_valid_i)
+            em.add_assignment(done_en, mem_data_valid_i & circ_data_ready_i)
 
         self._generate_observable_ports(em, q_addr, q_done, q_tail, q_head, done_en, alloc_en, load_en)
 
