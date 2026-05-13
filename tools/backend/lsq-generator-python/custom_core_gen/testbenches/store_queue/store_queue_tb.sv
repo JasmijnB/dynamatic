@@ -86,21 +86,8 @@ always #CLK_HALF clk = ~clk;
 // ===----------------------------------------------------------------------===
 `include "../utils.sv"
 
-// Send a store (addr + data simultaneously); blocks until the queue accepts both.
-task automatic port_send_store(
-    input logic [ADDR_W-1:0] addr,
-    input logic [DATA_W-1:0] data
-);
-    port_addr_i       = addr;
-    port_data_i       = data;
-    port_addr_valid_i = 1;
-    port_data_valid_i = 1;
-    @(posedge clk iff (port_addr_ready_o && port_data_ready_o));
-    #1;
-    port_addr_valid_i = 0;
-    port_data_valid_i = 0;
-endtask
-
+// Send a store address; blocks until the queue accepts it.
+// The queue buffers addresses independently of data.
 task automatic port_send_addr(
     input logic [ADDR_W-1:0] addr
 );
@@ -111,6 +98,9 @@ task automatic port_send_addr(
     port_addr_valid_i = 0;
 endtask
 
+// Present store data and block until the queue forwards it to AXI.
+// The write fires when can_issue && wreq_ready_i, so the AXI slave
+// must be asserting wreq_ready_i concurrently for this task to complete.
 task automatic port_send_data(
     input logic [DATA_W-1:0] data
 );
@@ -119,6 +109,18 @@ task automatic port_send_data(
     @(posedge clk iff port_data_ready_o);
     #1;
     port_data_valid_i = 0;
+endtask
+
+// Send a store (addr then data). Addr is buffered immediately; data is
+// forwarded to AXI at issue time. The caller must have an AXI slave
+// (axi_respond / axi_receive_store) running concurrently, otherwise
+// port_send_data will block indefinitely.
+task automatic port_send_store(
+    input logic [ADDR_W-1:0] addr,
+    input logic [DATA_W-1:0] data
+);
+    port_send_addr(addr);
+    port_send_data(data);
 endtask
 
 // AXI write-request channel (AW+W): TB is slave.
@@ -184,30 +186,27 @@ initial begin
     $dumpvars(0, store_queue_tb);
 
     // ------------------------------------------------------------------
-    // TEST 1: After reset the queue is empty and ready to accept
+    // TEST 1: After reset the queue is empty and ready to accept addresses.
+    // Data ready is 0: there are no queued addresses to issue, so
+    // port_data_ready_o = wreq_ready_i & can_issue = 0.
     // ------------------------------------------------------------------
     test_counter = 1;
     reset();
     check(empty_o,           1, "T1: empty after reset");
     check(port_addr_ready_o, 1, "T1: addr ready after reset");
-    check(port_data_ready_o, 1, "T1: data ready after reset");
+    check(port_data_ready_o, 0, "T1: data not ready when queue empty");
     check(wreq_valid_o,      0, "T1: no wreq after reset");
 
     // ------------------------------------------------------------------
-    // TEST 2: Single store end-to-end
+    // TEST 2: Single store end-to-end.
+    // The address is buffered immediately; data flows through to AXI at
+    // issue time. Both sides must run concurrently.
     // ------------------------------------------------------------------
     test_counter = 2;
     reset();
     fork
         port_send_store(32'hDEAD_0001, 32'hCAFE_0001);
-        begin
-            tick();
-            check(wreq_valid_o, 1,             "T2: wreq fires");
-            check(wreq_addr_o,  32'hDEAD_0001, "T2: wreq addr");
-            check(wreq_data_o,  32'hCAFE_0001, "T2: wreq data");
-            check(wreq_id_o,    ID_VAL,         "T2: wreq id");
-            axi_respond(32'hDEAD_0001, 32'hCAFE_0001);
-        end
+        axi_respond(32'hDEAD_0001, 32'hCAFE_0001);
     join
     tick();
     check(empty_o, 1, "T2: empty after store completes");
@@ -231,7 +230,8 @@ initial begin
     check(empty_o, 1, "T3: empty after two stores complete");
 
     // ------------------------------------------------------------------
-    // TEST 4: allow_alloc_i = 0 blocks allocation
+    // TEST 4: allow_alloc_i = 0 blocks address allocation.
+    // Data ready is also 0 because can_issue = 0 (queue is empty).
     // ------------------------------------------------------------------
     test_counter = 4;
     reset();
@@ -242,7 +242,7 @@ initial begin
     port_data_valid_i = 1;
     tick();
     check(port_addr_ready_o, 0, "T4: addr blocked when allow_alloc=0");
-    check(port_data_ready_o, 0, "T4: data blocked when allow_alloc=0");
+    check(port_data_ready_o, 0, "T4: data not ready (queue empty, no issueable entry)");
     tick();
     check(wreq_valid_o, 0, "T4: no wreq while blocked");
     port_addr_valid_i = 0;
@@ -250,22 +250,33 @@ initial begin
     allow_alloc_i     = 1;
 
     // ------------------------------------------------------------------
-    // TEST 5: AXI write-request back-pressure stalls issue
+    // TEST 5: AXI write-request back-pressure stalls issue.
+    // The address is buffered first (outside the fork), then data is
+    // presented concurrently with the AXI side.
     // ------------------------------------------------------------------
     test_counter = 5;
     reset();
     wreq_ready_i = 0;
+    // Buffer the address; this completes immediately regardless of wreq_ready.
+    port_send_addr(32'hCCCC_0001);
+    // Now can_issue=1. Fork: present data / check wreq / release back-pressure.
     fork
-        port_send_store(32'hCCCC_0001, 32'hCCCC_CCCC);
+        begin
+            port_data_i       = 32'hCCCC_CCCC;
+            port_data_valid_i = 1;
+            @(posedge clk iff port_data_ready_o);
+            #1;
+            port_data_valid_i = 0;
+        end
         begin
             tick();
             check(wreq_valid_o, 1, "T5: wreq asserted under back-pressure");
             tick();
             check(wreq_valid_o, 1, "T5: wreq held while not accepted");
             wreq_ready_i = 1;
-            tick();
+            @(posedge clk iff wreq_valid_o);
+            #1;
             wreq_ready_i = 0;
-            // Send the write response to retire the entry
             axi_send_resp();
         end
     join
@@ -273,23 +284,29 @@ initial begin
     check(empty_o, 1, "T5: empty after un-stall");
 
     // ------------------------------------------------------------------
-    // TEST 6: Fill queue to capacity, check full condition
+    // TEST 6: Fill address buffer to capacity, check full condition.
+    // Data is not buffered, so we fill the queue by sending addresses only.
     // ------------------------------------------------------------------
     test_counter = 6;
     reset();
-    wreq_ready_i  = 0;
     allow_access_i = 0;
-    port_send_store(32'hF001_0001, 32'hF001_F001);
-    port_send_store(32'hF001_0002, 32'hF001_F002);
-    port_send_store(32'hF001_0003, 32'hF001_F003);
-    port_send_store(32'hF001_0004, 32'hF001_F004);
+    port_send_addr(32'hF001_0001);
+    port_send_addr(32'hF001_0002);
+    port_send_addr(32'hF001_0003);
+    port_send_addr(32'hF001_0004);
     tick();
     check(port_addr_ready_o, 0, "T6: addr not ready when full");
-    check(port_data_ready_o, 0, "T6: data not ready when full");
+    check(port_data_ready_o, 0, "T6: data not ready when full (wreq_ready=0)");
     check(empty_o,           0, "T6: not empty when full");
     allow_access_i = 1;
-    // Drain the queue
+    // Drain: data must flow concurrently with the AXI slave.
     fork
+        begin
+            port_send_data(32'hF001_F001);
+            port_send_data(32'hF001_F002);
+            port_send_data(32'hF001_F003);
+            port_send_data(32'hF001_F004);
+        end
         begin
             axi_respond(32'hF001_0001, 32'hF001_F001);
             axi_respond(32'hF001_0002, 32'hF001_F002);
@@ -317,32 +334,36 @@ initial begin
     join
 
     // ------------------------------------------------------------------
-    // TEST 8: Two back-to-back stores with random pauses
+    // TEST 8: Pre-queue addresses, then drain with data and AXI.
+    // This tests the key difference from a fully-buffered design: addresses
+    // can be queued ahead of data, and data flows through in FIFO order.
     // ------------------------------------------------------------------
     test_counter = 8;
     reset();
+    // Queue up addresses before any data arrives.
     port_send_addr(32'hAAAA_0001);
-    tick();
-    port_send_data(32'h1111_0001);
-    port_send_data(32'h1111_0002);
-    tick();
-    tick();
     port_send_addr(32'hAAAA_0002);
     port_send_addr(32'hAAAA_0003);
+    // Drain: data flows through at issue time, paired in FIFO order.
+    fork
+        begin
+            port_send_data(32'hDDDD_0001);
+            port_send_data(32'hDDDD_0002);
+            port_send_data(32'hDDDD_0003);
+        end
+        begin
+            axi_respond(32'hAAAA_0001, 32'hDDDD_0001);
+            axi_respond(32'hAAAA_0002, 32'hDDDD_0002);
+            axi_respond(32'hAAAA_0003, 32'hDDDD_0003);
+        end
+    join
     tick();
-    port_send_data(32'h1111_0003);
-    port_send_data(32'h1111_0004);
-    tick();
-    tick();
-    port_send_addr(32'hAAAA_0004);
-    axi_respond(32'hAAAA_0001, 32'h1111_0001);
-    axi_respond(32'hAAAA_0002, 32'h1111_0002);
-    axi_respond(32'hAAAA_0003, 32'h1111_0003);
-    axi_respond(32'hAAAA_0004, 32'h1111_0004);
-    check(empty_o, 1, "T8: empty after two stores complete");
+    check(empty_o, 1, "T8: empty after stores complete");
 
     // ------------------------------------------------------------------
-    // TEST 9: Stress — N stores with random pauses on all channels
+    // TEST 9: Stress — N stores with random pauses on all channels.
+    // Addresses and data arrive independently with random delays.
+    // FIFO ordering ensures data[i] is always consumed for address[i].
     // ------------------------------------------------------------------
     test_counter = 9;
     reset();
@@ -365,7 +386,8 @@ initial begin
                 end
                 $display("T9: Address Sender done");
             end
-            
+
+            // --- Data Sender: each data[i] is held until consumed at issue time ---
             begin
                 for (int i = 0; i < N; i++) begin
                     repeat ($urandom_range(0, 5)) tick();

@@ -12,12 +12,116 @@ class Queue(Generator):
         super().__init__(name, suffix, configs)
 
 
-    def generate(self, em: Emitter, lsq_submodules, path_rtl) -> None:
+    def generate(self, em: Emitter, path_rtl) -> None:
         self.ports.clear()
-        if self.configs.q_type == "load":
-            self.generate_load_queue(em, lsq_submodules, path_rtl)
-        elif self.configs.q_type == "store":
-            self.generate_store_queue(em, lsq_submodules, path_rtl)
+        is_store = self.configs.q_type == "store"
+
+        # IOs - common
+        empty_o           = self._add_port(Logic   (em, "empty",          "o"))
+        port_addr_i       = self._add_port(LogicVec(em, "port_addr",       "i", self.configs.addr_width))
+        port_addr_valid_i = self._add_port(Logic   (em, "port_addr_valid", "i"))
+        port_addr_ready_o = self._add_port(Logic   (em, "port_addr_ready", "o"))
+
+        # IOs - type-specific
+        if is_store:
+            port_data_i       = self._add_port(LogicVec(em, "port_data",       "i", self.configs.data_width))
+            port_data_valid_i = self._add_port(Logic   (em, "port_data_valid", "i"))
+            port_data_ready_o = self._add_port(Logic   (em, "port_data_ready", "o"))
+            if self.configs.st_resp:
+                port_exec_valid_o = self._add_port(Logic(em, "port_exec_valid", "o"))
+                port_exec_ready_i = self._add_port(Logic(em, "port_exec_ready", "i"))
+            wreq_valid_o  = self._add_port(Logic   (em, "wreq_valid", "o"))
+            wreq_ready_i  = self._add_port(Logic   (em, "wreq_ready", "i"))
+            wreq_id_o     = self._add_port(LogicVec(em, "wreq_id",    "o", self.configs.id_width))
+            wreq_addr_o   = self._add_port(LogicVec(em, "wreq_addr",  "o", self.configs.addr_width))
+            wreq_data_o   = self._add_port(LogicVec(em, "wreq_data",  "o", self.configs.data_width))
+            wresp_valid_i = self._add_port(Logic   (em, "wresp_valid", "i"))
+            wresp_ready_o = self._add_port(Logic   (em, "wresp_ready", "o"))
+            wresp_id_i    = self._add_port(LogicVec(em, "wresp_id",    "i", self.configs.id_width))
+        else:
+            port_data_o       = self._add_port(LogicVec(em, "port_data",       "o", self.configs.data_width))
+            port_data_valid_o = self._add_port(Logic   (em, "port_data_valid", "o"))
+            port_data_ready_i = self._add_port(Logic   (em, "port_data_ready", "i"))
+            rreq_valid_o  = self._add_port(Logic   (em, "rreq_valid", "o"))
+            rreq_ready_i  = self._add_port(Logic   (em, "rreq_ready", "i"))
+            rreq_id_o     = self._add_port(LogicVec(em, "rreq_id",    "o", self.configs.id_width))
+            rreq_addr_o   = self._add_port(LogicVec(em, "rreq_addr",  "o", self.configs.addr_width))
+            rresp_valid_i = self._add_port(Logic   (em, "rresp_valid", "i"))
+            rresp_ready_o = self._add_port(Logic   (em, "rresp_ready", "o"))
+            rresp_id_i    = self._add_port(LogicVec(em, "rresp_id",    "i", self.configs.id_width))
+            rresp_data_i  = self._add_port(LogicVec(em, "rresp_data",  "i", self.configs.data_width))
+
+        allow_alloc_i  = self._add_port(Logic(em, "allow_alloc",  "i"))
+        allow_access_i = self._add_port(Logic(em, "allow_access", "i"))
+
+        # Shared pointer infrastructure
+        (q_done, q_issue, q_tail, q_head,
+         q_tail_oh,
+         done_en, issue_en, load_en, alloc_en,
+         q_full, q_empty, q_full_w_issue,
+         q_issue_sel) = self._setup_pointers(em)
+
+        # Address buffer (both types)
+        q_addr = LogicVecArray(em, "q_addr", "r", self.configs.num_entries, self.configs.addr_width)
+        for i in range(self.configs.num_entries):
+            em.add_assignment(q_addr[i],
+                port_addr_i.when(Val(q_tail_oh, i) & alloc_en).else_(q_addr[i]))
+        q_addr.regInit()
+
+        em.add_assignment(empty_o, q_empty)
+
+        # Allocation
+        can_alloc = Logic(em, "can_alloc", "w")
+        em.add_assignment(can_alloc, ~q_full & allow_alloc_i)
+        em.add_assignment(port_addr_ready_o, can_alloc)
+        em.add_assignment(alloc_en, port_addr_valid_i & can_alloc)
+
+        # Retirement
+        em.add_assignment(load_en, ~q_empty & allow_access_i)
+
+        # Issue — for store, gate on data validity so the pointer only advances on a real transfer
+        if is_store:
+            issue_ready = Logic(em, "issue_ready", "w")
+            em.add_assignment(issue_ready, wreq_ready_i & port_data_valid_i)
+            can_issue = self._setup_can_issue(
+                em, q_issue, q_head, q_full_w_issue, load_en, issue_en, issue_ready)
+        else:
+            can_issue = self._setup_can_issue(
+                em, q_issue, q_head, q_full_w_issue, load_en, issue_en, rreq_ready_i)
+
+        # AXI request / response
+        if is_store:
+            em.add_assignment(wreq_id_o,    Val(self.configs.id_val))
+            em.add_assignment(wreq_valid_o, can_issue & port_data_valid_i)
+            MuxLookUp(em, wreq_addr_o, q_addr, q_issue_sel)
+            em.add_assignment(wreq_data_o,       port_data_i)
+            em.add_assignment(port_data_ready_o, wreq_ready_i & can_issue)
+
+            if self.configs.st_resp:
+                em.add_assignment(port_exec_valid_o,
+                    wresp_valid_i & (wresp_id_i == Val(self.configs.id_val)))
+                em.add_assignment(wresp_ready_o, port_exec_ready_i)
+                em.add_assignment(done_en, wresp_valid_i & (wresp_id_i == Val(self.configs.id_val) & port_exec_ready_i))
+            else:
+                em.add_assignment(wresp_ready_o, Val(1))
+                em.add_assignment(done_en, wresp_valid_i & (wresp_id_i == Val(self.configs.id_val)))
+        else:
+            em.add_assignment(rreq_id_o,    Val(self.configs.id_val))
+            em.add_assignment(rreq_valid_o, can_issue)
+            MuxLookUp(em, rreq_addr_o, q_addr, q_issue_sel)
+
+            em.add_assignment(rresp_ready_o,    port_data_ready_i)
+            em.add_assignment(port_data_o,      rresp_data_i)
+            em.add_assignment(port_data_valid_o,
+                rresp_valid_i & (rresp_id_i == Val(self.configs.id_val)))
+            em.add_assignment(done_en, rresp_valid_i & (rresp_id_i == Val(self.configs.id_val) & port_data_ready_i))
+
+        self._generate_observable_ports(em, q_addr, q_done, q_tail, q_head, done_en, alloc_en, load_en)
+
+        if self.configs.master:
+            self._generate_master_interface(em, q_empty)
+
+        self._write_to_file(em, path_rtl)
 
     # ===----------------------------------------------------------------------===
     # Shared helpers
@@ -233,180 +337,3 @@ end
         with open(f"{path_rtl}/{self.name}.{em.get_file_suffix()}", "a") as file:
             file.write(output_str)
 
-    # ===----------------------------------------------------------------------===
-    # Load queue
-    # ===----------------------------------------------------------------------===
-
-    def generate_load_queue(self, em: Emitter, lsq_submodules, path_rtl) -> None:
-        # IOs
-        empty_o           = self._add_port(Logic   (em, "empty",          "o"))
-        port_addr_i       = self._add_port(LogicVec(em, "port_addr",       "i", self.configs.addr_width))
-        port_addr_valid_i = self._add_port(Logic   (em, "port_addr_valid", "i"))
-        port_addr_ready_o = self._add_port(Logic   (em, "port_addr_ready", "o"))
-        port_data_o       = self._add_port(LogicVec(em, "port_data",       "o", self.configs.data_width))
-        port_data_valid_o = self._add_port(Logic   (em, "port_data_valid", "o"))
-        port_data_ready_i = self._add_port(Logic   (em, "port_data_ready", "i"))
-        rreq_valid_o      = self._add_port(Logic   (em, "rreq_valid", "o"))
-        rreq_ready_i      = self._add_port(Logic   (em, "rreq_ready", "i"))
-        rreq_id_o         = self._add_port(LogicVec(em, "rreq_id",    "o", self.configs.id_width))
-        rreq_addr_o       = self._add_port(LogicVec(em, "rreq_addr",  "o", self.configs.addr_width))
-        rresp_valid_i     = self._add_port(Logic   (em, "rresp_valid", "i"))
-        rresp_ready_o     = self._add_port(Logic   (em, "rresp_ready", "o"))
-        rresp_id_i        = self._add_port(LogicVec(em, "rresp_id",    "i", self.configs.id_width))
-        rresp_data_i      = self._add_port(LogicVec(em, "rresp_data",  "i", self.configs.data_width))
-        allow_alloc_i     = self._add_port(Logic   (em, "allow_alloc",  "i"))
-        allow_access_i    = self._add_port(Logic   (em, "allow_access", "i"))
-
-        # Shared pointer infrastructure
-        (q_done, q_issue, q_tail, q_head,
-         q_tail_oh,
-         done_en, issue_en, load_en, alloc_en,
-         q_full, q_empty, q_full_w_issue,
-         q_issue_sel) = self._setup_pointers(em)
-
-        # Queue entries
-        q_addr = LogicVecArray(em, "q_addr", "r", self.configs.num_entries, self.configs.addr_width)
-        for i in range(self.configs.num_entries):
-            em.add_assignment(q_addr[i],
-                port_addr_i.when(Val(q_tail_oh, i) & alloc_en).else_(q_addr[i]))
-        q_addr.regInit()
-
-        em.add_assignment(empty_o, q_empty)
-
-        # Allocation
-        can_alloc = Logic(em, "can_alloc", "w")
-        em.add_assignment(can_alloc, ~q_full & allow_alloc_i)
-        em.add_assignment(port_addr_ready_o, can_alloc)
-        em.add_assignment(alloc_en, port_addr_valid_i & can_alloc)
-
-        # Retirement: head advances whenever the queue is non-empty and loads are allowed
-        em.add_assignment(load_en, ~q_empty & allow_access_i)
-
-        # Issue
-        can_issue = self._setup_can_issue(
-            em, q_issue, q_head, q_full_w_issue, load_en, issue_en, rreq_ready_i)
-
-        # AXI read request
-        em.add_assignment(rreq_id_o,    Val(self.configs.id_val))
-        em.add_assignment(rreq_valid_o, can_issue)
-        MuxLookUp(em, rreq_addr_o, q_addr, q_issue_sel)
-
-        # AXI read response → kernel (pure combinatorial passthrough)
-        em.add_assignment(rresp_ready_o,    port_data_ready_i)
-        em.add_assignment(port_data_o,      rresp_data_i)
-        em.add_assignment(port_data_valid_o,
-            rresp_valid_i & (rresp_id_i == Val(self.configs.id_val)))
-        em.add_assignment(done_en, rresp_valid_i & (rresp_id_i == Val(self.configs.id_val) & port_data_ready_i))
-
-        self._generate_observable_ports(em, q_addr, q_done, q_tail, q_head, done_en, alloc_en, load_en)
-
-        if self.configs.master:
-            self._generate_master_interface(em, q_empty)
-
-        self._write_to_file(em, path_rtl)
-
-    # ===----------------------------------------------------------------------===
-    # Store queue
-    # ===----------------------------------------------------------------------===
-
-    def generate_store_queue(self, em: Emitter, lsq_submodules, path_rtl) -> None:
-        # IOs
-        empty_o           = self._add_port(Logic   (em, "empty",          "o"))
-        port_addr_i       = self._add_port(LogicVec(em, "port_addr",       "i", self.configs.addr_width))
-        port_addr_valid_i = self._add_port(Logic   (em, "port_addr_valid", "i"))
-        port_addr_ready_o = self._add_port(Logic   (em, "port_addr_ready", "o"))
-        port_data_i       = self._add_port(LogicVec(em, "port_data",       "i", self.configs.data_width))
-        port_data_valid_i = self._add_port(Logic   (em, "port_data_valid", "i"))
-        port_data_ready_o = self._add_port(Logic   (em, "port_data_ready", "o"))
-
-        if self.configs.st_resp:
-            port_exec_valid_o = self._add_port(Logic(em, "port_exec_valid", "o"))
-            port_exec_ready_i = self._add_port(Logic(em, "port_exec_ready", "i"))
-
-        wreq_valid_o  = self._add_port(Logic   (em, "wreq_valid", "o"))
-        wreq_ready_i  = self._add_port(Logic   (em, "wreq_ready", "i"))
-        wreq_id_o     = self._add_port(LogicVec(em, "wreq_id",    "o", self.configs.id_width))
-        wreq_addr_o   = self._add_port(LogicVec(em, "wreq_addr",  "o", self.configs.addr_width))
-        wreq_data_o   = self._add_port(LogicVec(em, "wreq_data",  "o", self.configs.data_width))
-        wresp_valid_i = self._add_port(Logic   (em, "wresp_valid", "i"))
-        wresp_ready_o = self._add_port(Logic   (em, "wresp_ready", "o"))
-        wresp_id_i    = self._add_port(LogicVec(em, "wresp_id",    "i", self.configs.id_width))
-        allow_alloc_i  = self._add_port(Logic  (em, "allow_alloc",  "i"))
-        allow_access_i = self._add_port(Logic  (em, "allow_access", "i"))
-
-        # Shared pointer infrastructure
-        (q_done, q_issue, q_tail, q_head,
-         q_tail_oh,
-         done_en, issue_en, load_en, alloc_en,
-         q_full, q_empty, q_full_w_issue,
-         q_issue_sel) = self._setup_pointers(em)
-
-        # Queue entries
-        q_addr = LogicVecArray(em, "q_addr", "r", self.configs.num_entries, self.configs.addr_width)
-        q_data = LogicVecArray(em, "q_data", "r", self.configs.num_entries, self.configs.data_width)
-
-        # Staging registers: track whether the current tail slot already has addr/data
-        tail_addr_valid = Logic(em, "tail_addr_valid", "r")
-        tail_data_valid = Logic(em, "tail_data_valid", "r")
-
-        alloc_addr_en = Logic(em, "alloc_addr_en", "w")
-        alloc_data_en = Logic(em, "alloc_data_en", "w")
-
-        # Per-entry writes: update on the cycle addr/data arrive for the tail slot
-        for i in range(self.configs.num_entries):
-            em.add_assignment(q_addr[i],
-                port_addr_i.when(Val(q_tail_oh, i) & alloc_addr_en).else_(q_addr[i]))
-            em.add_assignment(q_data[i],
-                port_data_i.when(Val(q_tail_oh, i) & alloc_data_en).else_(q_data[i]))
-        q_addr.regInit()
-        q_data.regInit()
-
-        # Staging: set when addr/data arrive, cleared when tail advances (alloc_en)
-        em.add_assignment(tail_addr_valid, (alloc_addr_en | tail_addr_valid) & ~alloc_en)
-        em.add_assignment(tail_data_valid, (alloc_data_en | tail_data_valid) & ~alloc_en)
-        tail_addr_valid.regInit(init=0)
-        tail_data_valid.regInit(init=0)
-
-        em.add_assignment(empty_o, q_empty)
-
-        # Allocation: addr and data may arrive independently; tail advances once both are valid
-        can_alloc_addr = Logic(em, "can_alloc_addr", "w")
-        can_alloc_data = Logic(em, "can_alloc_data", "w")
-        em.add_assignment(can_alloc_addr, allow_alloc_i & ~tail_addr_valid & ~q_full)
-        em.add_assignment(can_alloc_data, allow_alloc_i & ~tail_data_valid & ~q_full)
-        em.add_assignment(port_addr_ready_o, can_alloc_addr)
-        em.add_assignment(port_data_ready_o, can_alloc_data)
-        em.add_assignment(alloc_addr_en, port_addr_valid_i & can_alloc_addr)
-        em.add_assignment(alloc_data_en, port_data_valid_i & can_alloc_data)
-        em.add_assignment(alloc_en,
-            (tail_addr_valid | alloc_addr_en) & (tail_data_valid | alloc_data_en))
-
-        # Retirement: head advances when queue is non-empty and stores are allowed
-        em.add_assignment(load_en, ~q_empty & allow_access_i)
-
-        # Issue
-        can_issue = self._setup_can_issue(
-            em, q_issue, q_head, q_full_w_issue, load_en, issue_en, wreq_ready_i)
-
-        # AXI write request
-        em.add_assignment(wreq_id_o,    Val(self.configs.id_val))
-        em.add_assignment(wreq_valid_o, can_issue)
-        MuxLookUp(em, wreq_addr_o, q_addr, q_issue_sel)
-        MuxLookUp(em, wreq_data_o, q_data, q_issue_sel)
-
-        # AXI write response
-        if self.configs.st_resp:
-            em.add_assignment(port_exec_valid_o,
-                wresp_valid_i & (wresp_id_i == Val(self.configs.id_val)))
-            em.add_assignment(wresp_ready_o, port_exec_ready_i)
-            em.add_assignment(done_en, wresp_valid_i & (wresp_id_i == Val(self.configs.id_val) & port_exec_ready_i))
-        else:
-            em.add_assignment(wresp_ready_o, Val(1))
-            em.add_assignment(done_en, wresp_valid_i & (wresp_id_i == Val(self.configs.id_val)))
-
-        self._generate_observable_ports(em, q_addr, q_done, q_tail, q_head, done_en, alloc_en, load_en)
-
-        if self.configs.master:
-            self._generate_master_interface(em, q_empty)
-
-        self._write_to_file(em, path_rtl)
