@@ -3,6 +3,7 @@
 from core_gen.emitters import Emitter
 from core_gen.signals import *
 from core_gen.ir import BinOp, Bin, Val, Bit, CustomStatement, Type, reduce_bin
+from custom_core_gen.configs import QueueConfig, DependencyCheckerConfig
 from custom_core_gen.generators.queue import Queue
 from custom_core_gen.generators.dependency_checker import DependencyChecker
 from custom_core_gen.generators.generator import Generator
@@ -122,14 +123,63 @@ class Structure(Generator):
         graphs = pydot.graph_from_dot_file(dot_path)
         graph = graphs[0]
 
-        queue_def = Queue(name="store_queue", suffix="", configs=configs['QConfig'])
-        dc_def = DependencyChecker(name="dependency_checker", suffix="", configs=configs['DCConfig'])
+        def strip_quotes(s):
+            return s.strip('"\'')
 
-        queue_def.generate(em.new(), lsq_submodules=None, path_rtl=out_path)
-        dc_def.generate(em.new(), path_rtl=out_path)
+        def get_config_id(attrs):
+            return int(strip_quotes(str(attrs.get('config_id', '0'))))
 
-        q_ports  = set(queue_def.ports.keys())
-        dc_ports = set(dc_def.ports.keys())
+        def node_config_id(node_name):
+            nodes = graph.get_node(node_name)
+            return get_config_id(nodes[0].get_attributes()) if nodes else 0
+
+        # Collect edges as (src, dst, dc_config_id) in graph order
+        edge_triples = [
+            (strip_quotes(e.get_source()), strip_quotes(e.get_destination()), get_config_id(e.get_attributes()))
+            for e in graph.get_edges()
+        ]
+
+        # Collect queue nodes in first-seen order, paired with their config IDs
+        seen = {}
+        for src, dst, _ in edge_triples:
+            for name in [src, dst]:
+                if name not in seen:
+                    seen[name] = node_config_id(name)
+        node_config_ids = seen  # {node_name: config_id}
+
+        # Generate one Queue def per unique queue config ID
+        queue_defs = {}
+        for config_id in sorted(set(node_config_ids.values())):
+            q_def = Queue(name=f"queue_{config_id}", suffix="", configs=QueueConfig(configs[f'queue_{config_id}']))
+            q_def.generate(em.new(), path_rtl=out_path)
+            queue_defs[config_id] = q_def
+
+        # Generate one DependencyChecker def per unique (dc_id, pq_config_id, sq_config_id) triple
+        dc_def_map = {}
+        for src, dst, dc_id in edge_triples:
+            pq_config_id = node_config_ids[src]
+            sq_config_id = node_config_ids[dst]
+            key = (dc_id, pq_config_id, sq_config_id)
+            if key not in dc_def_map:
+                dc_config = DependencyCheckerConfig.from_parts(
+                    configs[f'dp_{dc_id}'],
+                    queue_defs[pq_config_id].configs,
+                    queue_defs[sq_config_id].configs,
+                )
+                dc_def = DependencyChecker(
+                    name=f"dependency_checker_{dc_id}_pq{pq_config_id}_sq{sq_config_id}",
+                    suffix="",
+                    configs=dc_config,
+                )
+                dc_def.generate(em.new(), path_rtl=out_path)
+                dc_def_map[key] = dc_def
+
+        # Validate port maps against any one representative def
+        any_queue_def = next(iter(queue_defs.values()))
+        any_dc_def = next(iter(dc_def_map.values()))
+
+        q_ports  = set(any_queue_def.ports.keys())
+        dc_ports = set(any_dc_def.ports.keys())
 
         pq_keys, pq_vals = set(DC_TO_PQ_MAP.keys()), set(DC_TO_PQ_MAP.values())
         sq_keys, sq_vals = set(DC_TO_SQ_MAP.keys()), set(DC_TO_SQ_MAP.values())
@@ -138,67 +188,57 @@ class Structure(Generator):
         assert pq_vals <= q_ports,  f"DC_TO_PQ_MAP values not in queue ports: {pq_vals - q_ports}"
         assert sq_keys <= dc_ports, f"DC_TO_SQ_MAP keys not in DC ports:     {sq_keys - dc_ports}"
         assert sq_vals <= q_ports,  f"DC_TO_SQ_MAP values not in queue ports: {sq_vals - q_ports}"
+        assert (pq_keys | sq_keys) == dc_ports, f"DC ports not fully mapped: {dc_ports - (pq_keys | sq_keys)}"
 
-        dc_mapped = pq_keys | sq_keys
-        assert dc_mapped == dc_ports, f"DC ports not fully mapped: {dc_ports - dc_mapped}"
+        # Build one set of universal port arrays per config group, each sized to that group's count
+        group_sizes = defaultdict(int)
+        for config_id in node_config_ids.values():
+            group_sizes[config_id] += 1
 
-        successors = defaultdict(list)
-        # only contains the queues with an edge in between
-        queue_nodes = set()
+        universal_vars = {}  # {config_id: {port: array}}
+        for config_id, q_def in queue_defs.items():
+            group_size = group_sizes[config_id]
+            q_ports = q_def.get_ports()
+            global_q_ports = get_global_queue_ports(q_def)
+            universal_vars[config_id] = {}
+            for port in global_q_ports:
+                signal = q_ports[port]
+                if type(signal) == LogicVec:
+                    universal_vars[config_id][port] = LogicVecArray(em, f"{port}_q{config_id}_array", signal.type, group_size, signal.size)
+                elif type(signal) == Logic:
+                    universal_vars[config_id][port] = LogicArray(em, f"{port}_q{config_id}_array", signal.type, group_size)
+                else:
+                    raise Exception(f"Unsupported signal type {type(signal)} for port {port}")
 
-        for edge in graph.get_edges():
-            queue_nodes.add(edge.get_source())
-            queue_nodes.add(edge.get_destination())
-            
-        # give the queues a fixed order
-        queue_nodes = list(queue_nodes)
-            
-        num_queues = len(queue_nodes)
-        queue_ports = queue_def.get_ports()
-        global_queue_ports = get_global_queue_ports(queue_def)
-        # for each universal queue port, create an output/input variable
-        universal_vars = {}
-        for port in global_queue_ports:
-            signal = queue_ports[port]
-            if type(signal) == LogicVec:
-                universal_vars[port] = LogicVecArray(em, port + "_array", signal.type, num_queues, signal.size)
-            elif type(signal) == Logic:
-                universal_vars[port] = LogicArray(em, port + "_array", signal.type, num_queues)
-            else:
-                raise Exception(f"Unsupported signal type {type(signal)} for port {port}")
-            
-        # generate the queue signal maps
+        # Create queue instances, numbered within their config group
         queues = {}
-        for i, queue in enumerate(queue_nodes):
-            queue_type = queue[:2]
-            queue_instance = QueueInstance(queue_def, i, queue_type)
-            queue_instance.init_port_vars(universal_vars)
-            queues[queue] = queue_instance
-            
-        # generate the dependeny checker signal maps and connecting signals between queues and dependency checkers
-        dp_checkers = []
-        for edge in graph.get_edges():
-            src = edge.get_source()
-            dst = edge.get_destination()
-            if src not in queues or dst not in queues:
-                raise Exception(f"{src} or {dst} not in queues")
+        group_counters = defaultdict(int)
+        for queue_name, config_id in node_config_ids.items():
+            queue_type = queue_name[:2]
+            within_group_idx = group_counters[config_id]
+            group_counters[config_id] += 1
+            queue_instance = QueueInstance(queue_defs[config_id], within_group_idx, queue_type)
+            queue_instance.init_port_vars(universal_vars[config_id])
+            queues[queue_name] = queue_instance
 
-            dp_checker = DependencyCheckerInstance(dc_def, queues[src], queues[dst])
+        # Create dependency checker instances
+        dp_checkers = []
+        for src, dst, dc_id in edge_triples:
+            key = (dc_id, node_config_ids[src], node_config_ids[dst])
+            dp_checker = DependencyCheckerInstance(dc_def_map[key], queues[src], queues[dst])
             dp_checker.init_port_vars(em)
             dp_checkers.append(dp_checker)
-            
-        # instantiate the default maps
-        # a queue without predecessors does not have allow_alloc and a queue without successors does not have allow_access
-        # so in this case we can simply set these to true
+
+        # a queue without predecessors has no allow_alloc signal; without successors no allow_access — default both to 1
         defaults = {}
         defaults["allow_alloc_i"] = Logic(em, "allow_alloc_default", "w")
         defaults["allow_access_i"] = Logic(em, "allow_access_default", "w")
         em.add_assignment(defaults["allow_alloc_i"], Val(1))
         em.add_assignment(defaults["allow_access_i"], Val(1))
-        
+
         for queue in queues.values():
             queue.instantiate(em, defaults)
         for dp_checker in dp_checkers:
             dp_checker.instantate(em)
-            
+
         self._write_to_file(em, out_path)

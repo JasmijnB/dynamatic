@@ -63,6 +63,15 @@ class DependencyCheckerConfig:
         self.access_disparity_width = config.get("AccessDisparityWidth", 2)
 
     @staticmethod
+    def from_parts(dc_config: dict, pq_config: 'QueueConfig', sq_config: 'QueueConfig') -> 'DependencyCheckerConfig':
+        obj = DependencyCheckerConfig.__new__(DependencyCheckerConfig)
+        obj.pq = pq_config
+        obj.sq = sq_config
+        obj.tail_offset_width = dc_config.get("TailOffsetWidth", 3)
+        obj.access_disparity_width = dc_config.get("AccessDisparityWidth", 2)
+        return obj
+
+    @staticmethod
     def from_json(config_path:str, pq_config=None, sq_config=None):
         if isinstance(pq_config, str):
             pq_config_dict = json.load(open(pq_config, "r"))
