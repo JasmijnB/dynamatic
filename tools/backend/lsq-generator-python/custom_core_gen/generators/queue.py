@@ -46,7 +46,6 @@ class Queue(Generator):
             circ_data_valid_o = self._add_port(Logic   (em, "circ_data_valid", "o"))
             circ_data_ready_i = self._add_port(Logic   (em, "circ_data_ready", "i"))
 
-        allow_alloc_i  = self._add_port(Logic(em, "allow_alloc",  "i"))
         allow_access_i = self._add_port(Logic(em, "allow_access", "i"))
 
         # Shared pointer infrastructure
@@ -67,7 +66,7 @@ class Queue(Generator):
 
         # Allocation
         can_alloc = Logic(em, "can_alloc", "w")
-        em.add_assignment(can_alloc, ~q_full & allow_alloc_i)
+        em.add_assignment(can_alloc, ~q_full)
         em.add_assignment(circ_addr_ready_o, can_alloc)
         em.add_assignment(alloc_en, circ_addr_valid_i & can_alloc)
 

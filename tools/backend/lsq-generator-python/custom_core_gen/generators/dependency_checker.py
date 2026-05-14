@@ -34,6 +34,9 @@ class DependencyChecker(Generator):
 
         ######  Outputs ######
         allow_sq_access_o = self._add_port(Logic(em, "allow_sq_access", "o"))
+        allow_pq_access_o = self._add_port(Logic(em, "allow_pq_access", "o"))
+        # TODO: Only allow predecessor access when the access disparity bit cannot overflow
+        em.add_assignment(allow_pq_access_o, Val(1)) 
 
         tail_offset      = LogicVec(em, "tail_offset",      "w", pq_ptr_width)
         access_disparity = LogicVec(em, "access_disparity", "r", self.configs.access_disparity_width, is_signed=True)
