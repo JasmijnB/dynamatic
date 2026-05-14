@@ -110,7 +110,7 @@ class DependencyCheckerInstance():
             self.connect_ports(port_name, DC_TO_SQ_MAP, self.succ, em)
             
     def instantate(self, em):
-        self.dp_def.instantiate(em, self.port_vars)
+        self.dp_def.instantiate(em, self.port_vars, f"dp_q{self.pred.num}_q{self.succ.num}")
             
 
 class Structure(Generator):
@@ -167,7 +167,7 @@ class Structure(Generator):
                     queue_defs[sq_config_id].configs,
                 )
                 dc_def = DependencyChecker(
-                    name=f"dependency_checker_{dc_id}_pq{pq_config_id}_sq{sq_config_id}",
+                    name=f"dependency_checker_{dc_id}",
                     suffix="",
                     configs=dc_config,
                 )
