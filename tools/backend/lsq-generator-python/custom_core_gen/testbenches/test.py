@@ -48,12 +48,11 @@ def test_generate(testbench):
 def test_simulate(testbench):
     name = testbench.name
     tb_sv = testbench / f"{name}_tb.sv"
-    rtl_v = testbench / "out" / f"{name}.v"
 
     if not tb_sv.exists():
         pytest.skip(f"no testbench file {tb_sv.name}")
-    if not rtl_v.exists():
-        pytest.skip(f"no generated RTL {rtl_v.name} — run test_generate first")
+    if not any((testbench / "out").glob("*.v")):
+        pytest.skip(f"no generated RTL in out/ — run test_generate first")
 
     out_dir = testbench / "out"
     env = {**os.environ, "PYTHONPATH": str(LSQ_ROOT)}
@@ -67,8 +66,9 @@ def test_simulate(testbench):
         ["vlog", "-sv", str(tb_sv)],
         cwd=out_dir, env=env, check=True,
     )
+    rtl_files = sorted(out_dir.glob("*.v"))
     subprocess.run(
-        ["vlog", f"{name}.v"],
+        ["vlog"] + [f.name for f in rtl_files],
         cwd=out_dir, env=env, check=True,
     )
 
