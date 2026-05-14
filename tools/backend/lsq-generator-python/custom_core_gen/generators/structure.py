@@ -13,11 +13,10 @@ from copy import copy
 from collections import defaultdict
 
 DC_TO_PQ_MAP = {
-    "pq_addr_i":      "q_addr_o",
+    "pq_addr_i":    "q_addr_o",
     "pq_done_i":    "done_ptr_o",
-    "pq_send_en_i":     "done_en_o",
-    "pq_alloc_en_i":    "alloc_en_o",
-    "allow_pq_alloc_o": "allow_alloc_i",
+    "pq_send_en_i": "done_en_o",
+    "pq_length_i":  "length_o",
 }
 
 

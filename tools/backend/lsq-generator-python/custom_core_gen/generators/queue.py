@@ -289,6 +289,7 @@ end
         """Add output ports that expose internal queue state for observation."""
         n = self.configs.q_addr_width
         use_bit_flip = isPow2(self.configs.num_entries)
+        ptr_width = n + 1 if use_bit_flip else n
 
         q_addr_out_o = self._add_port(
             LogicVecArray(em, "q_addr", "o", self.configs.num_entries, self.configs.addr_width))
@@ -308,12 +309,14 @@ end
             em.add_assignment(alloc_ptr_o, q_tail)
             em.add_assignment(head_ptr_o,  q_head)
 
+        # Number of entries from done to tail (allocated but not yet complete).
+        length_o    = self._add_port(LogicVec(em, "length",    "o", ptr_width))
+        em.add_assignment(length_o, q_tail - q_done)
+
         done_en_o   = self._add_port(Logic(em, "done_en",   "o"))
-        alloc_en_o  = self._add_port(Logic(em, "alloc_en",  "o"))
         access_en_o = self._add_port(Logic(em, "access_en", "o"))
 
         em.add_assignment(done_en_o,   done_en)
-        em.add_assignment(alloc_en_o,  alloc_en)
         em.add_assignment(access_en_o, load_en)
 
     def _write_to_file(self, em: Emitter, path_rtl: str):

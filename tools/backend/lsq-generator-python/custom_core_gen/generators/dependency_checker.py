@@ -48,11 +48,12 @@ class DependencyChecker(Generator):
         allow_sq_access_o = self._add_port(Logic(em, "allow_sq_access", "o"))
 
         tail_offset      = LogicVec(em, "tail_offset",      "w", self.configs.tail_offset_width)
-        access_disparity = LogicVec(em, "access_disparity", "w", self.configs.access_disparity_width, is_signed=True)
+        access_disparity = LogicVec(em, "access_disparity", "r", self.configs.access_disparity_width, is_signed=True)
 
         conflict = Logic(em, "conflict", "w")
 
         em.add_assignment(access_disparity, access_disparity - pq_done_en_i + sq_access_en_i)
+        access_disparity.regInit()
 
         check_mask = LogicVec(em, "check_mask", "w", self.configs.pq.num_entries)
         ones = LogicVec(em, "ones", "w", self.configs.pq.num_entries)
