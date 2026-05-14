@@ -3,7 +3,6 @@ from core_gen.signals import *
 from core_gen.operators import *
 from core_gen.configs import Configs
 from core_gen.ir import BinOp, Bin, Val, Bit, CustomStatement, reduce_bin
-from core_gen.utils import isPow2
 from custom_core_gen.generators.generator import Generator
 
 
@@ -189,8 +188,7 @@ end
             q_issue_sel                     — lower bits of q_issue for MuxLookUp
         """
         n = self.configs.q_addr_width
-        use_bit_flip = isPow2(self.configs.num_entries)
-        ptr_width = n + 1 if use_bit_flip else n
+        ptr_width = n + 1
 
         q_done  = LogicVec(em, "q_done",  "r", ptr_width)
         q_issue = LogicVec(em, "q_issue", "r", ptr_width)
@@ -204,26 +202,22 @@ end
 
         q_tail_oh = LogicVec(em, "q_tail_oh", "w", self.configs.num_entries)
 
-        if use_bit_flip:
-            # BitsToOH and MuxLookUp need the physical index (lower n bits only)
-            q_tail_idx = LogicVec(em, "q_tail_idx", "w", n)
-            em.add_assignment(q_tail_idx, Val(em.slice_var(q_tail.getNameRead(), n - 1, 0)))
-            BitsToOH(em, q_tail_oh, q_tail_idx)
+        # BitsToOH and MuxLookUp need the physical index (lower n bits only)
+        q_tail_idx = LogicVec(em, "q_tail_idx", "w", n)
+        em.add_assignment(q_tail_idx, Val(em.slice_var(q_tail.getNameRead(), n - 1, 0)))
+        BitsToOH(em, q_tail_oh, q_tail_idx)
 
-            q_issue_sel = LogicVec(em, "q_issue_sel", "w", n)
-            em.add_assignment(q_issue_sel, Val(em.slice_var(q_issue.getNameRead(), n - 1, 0)))
-        else:
-            BitsToOH(em, q_tail_oh, q_tail)
-            q_issue_sel = q_issue
+        q_issue_sel = LogicVec(em, "q_issue_sel", "w", n)
+        em.add_assignment(q_issue_sel, Val(em.slice_var(q_issue.getNameRead(), n - 1, 0)))
 
         done_en  = Logic(em, "done_en",  "w")
         issue_en = Logic(em, "issue_en", "w")
         alloc_en = Logic(em, "alloc_en", "w")
         load_en  = Logic(em, "load_en",  "w")
 
-        q_full         = Logic(em, "q_full",         "w" if use_bit_flip else "r")
+        q_full         = Logic(em, "q_full",         "w")
         q_empty        = Logic(em, "q_empty",        "w")
-        q_full_w_issue = Logic(em, "q_full_w_issue", "w" if use_bit_flip else "r")
+        q_full_w_issue = Logic(em, "q_full_w_issue", "w")
 
         WrapAddConst(em, q_issue_next, q_issue, 1, self.configs.num_entries)
         WrapAddConst(em, q_done_next,  q_done,  1, self.configs.num_entries)
@@ -240,30 +234,22 @@ end
         q_tail .regInit(init=0, enable=alloc_en)
         q_head .regInit(init=0, enable=load_en)
 
-        if use_bit_flip:
-            # Full between tail and done: lower bits match but generation bits differ
-            tail_msb = Val(em.index_var(q_tail.getNameRead(), n))
-            done_msb = Val(em.index_var(q_done.getNameRead(), n))
-            tail_low = Val(em.slice_var(q_tail.getNameRead(), n - 1, 0))
-            done_low = Val(em.slice_var(q_done.getNameRead(), n - 1, 0))
-            em.add_assignment(q_full, (tail_msb != done_msb) & (tail_low == done_low))
+        # Full between tail and done: lower bits match but generation bits differ
+        tail_msb = Val(em.index_var(q_tail.getNameRead(), n))
+        done_msb = Val(em.index_var(q_done.getNameRead(), n))
+        tail_low = Val(em.slice_var(q_tail.getNameRead(), n - 1, 0))
+        done_low = Val(em.slice_var(q_done.getNameRead(), n - 1, 0))
+        em.add_assignment(q_full, (tail_msb != done_msb) & (tail_low == done_low))
 
-            # Empty: all bits (including generation) equal
-            em.add_assignment(q_empty, q_tail == q_head)
+        # Empty: all bits (including generation) equal
+        em.add_assignment(q_empty, q_tail == q_head)
 
-            # Full between issue and head: same lower bits, different generation
-            issue_msb = Val(em.index_var(q_issue.getNameRead(), n))
-            head_msb  = Val(em.index_var(q_head.getNameRead(),  n))
-            issue_low = Val(em.slice_var(q_issue.getNameRead(), n - 1, 0))
-            head_low  = Val(em.slice_var(q_head.getNameRead(),  n - 1, 0))
-            em.add_assignment(q_full_w_issue, (issue_msb != head_msb) & (issue_low == head_low))
-        else:
-            em.add_assignment(q_full, (q_tail_next == q_done) & alloc_en | (q_full & (q_tail == q_done)))
-            em.add_assignment(q_empty, (q_tail == q_head) & ~q_full)
-            em.add_assignment(q_full_w_issue, (q_head_next == q_issue) | (q_full_w_issue & (q_head == q_issue)))
-
-            q_full        .regInit(init=0)
-            q_full_w_issue.regInit(init=0)
+        # Full between issue and head: same lower bits, different generation
+        issue_msb = Val(em.index_var(q_issue.getNameRead(), n))
+        head_msb  = Val(em.index_var(q_head.getNameRead(),  n))
+        issue_low = Val(em.slice_var(q_issue.getNameRead(), n - 1, 0))
+        head_low  = Val(em.slice_var(q_head.getNameRead(),  n - 1, 0))
+        em.add_assignment(q_full_w_issue, (issue_msb != head_msb) & (issue_low == head_low))
 
         return (q_done, q_issue, q_tail, q_head,
                 q_tail_oh,
@@ -288,8 +274,7 @@ end
                                     done_en, alloc_en, load_en) -> None:
         """Add output ports that expose internal queue state for observation."""
         n = self.configs.q_addr_width
-        use_bit_flip = isPow2(self.configs.num_entries)
-        ptr_width = n + 1 if use_bit_flip else n
+        ptr_width = n + 1
 
         q_addr_out_o = self._add_port(
             LogicVecArray(em, "q_addr", "o", self.configs.num_entries, self.configs.addr_width))
@@ -300,14 +285,9 @@ end
         alloc_ptr_o = self._add_port(LogicVec(em, "alloc_ptr", "o", n))
         head_ptr_o  = self._add_port(LogicVec(em, "head_ptr",  "o", n))
 
-        if use_bit_flip:
-            em.add_assignment(done_ptr_o,  Val(em.slice_var(q_done.getNameRead(), n - 1, 0)))
-            em.add_assignment(alloc_ptr_o, Val(em.slice_var(q_tail.getNameRead(), n - 1, 0)))
-            em.add_assignment(head_ptr_o,  Val(em.slice_var(q_head.getNameRead(), n - 1, 0)))
-        else:
-            em.add_assignment(done_ptr_o,  q_done)
-            em.add_assignment(alloc_ptr_o, q_tail)
-            em.add_assignment(head_ptr_o,  q_head)
+        em.add_assignment(done_ptr_o,  Val(em.slice_var(q_done.getNameRead(), n - 1, 0)))
+        em.add_assignment(alloc_ptr_o, Val(em.slice_var(q_tail.getNameRead(), n - 1, 0)))
+        em.add_assignment(head_ptr_o,  Val(em.slice_var(q_head.getNameRead(), n - 1, 0)))
 
         # Number of entries from done to tail (allocated but not yet complete).
         length_o    = self._add_port(LogicVec(em, "length",    "o", ptr_width))

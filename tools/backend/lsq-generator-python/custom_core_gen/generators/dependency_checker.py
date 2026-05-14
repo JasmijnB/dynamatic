@@ -2,7 +2,6 @@ from core_gen.emitters import Emitter
 from core_gen.signals import *
 from core_gen.operators import CyclicRightShift, MuxLookUp, Reduce
 from core_gen.ir import BinOp, Bin, Val, Bit, CustomStatement, Type
-from core_gen.utils import isPow2
 from custom_core_gen.configs import DependencyCheckerConfig
 from custom_core_gen.generators.generator import Generator
 
@@ -14,7 +13,7 @@ class DependencyChecker(Generator):
     def generate(self, em: Emitter, path_rtl) -> None:
         self.ports.clear()
 
-        pq_ptr_width = self.configs.pq.q_addr_width + 1 if isPow2(self.configs.pq.num_entries) else self.configs.pq.q_addr_width
+        pq_ptr_width = self.configs.pq.q_addr_width + 1
 
         ######  Queue Inputs ######
         # ===[ predecessor ]===

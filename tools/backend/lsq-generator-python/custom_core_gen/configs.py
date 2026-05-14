@@ -30,14 +30,15 @@ class QueueConfig:
         self.st_resp = config["StResp"]
 
         self.q_addr_width = math.ceil(math.log2(self.num_entries))
-        
+
         self.pipe0 = bool(config["pipe0En"])
         self.pipe1 = bool(config["pipe1En"])
         self.pipeComp = bool(config["pipeCompEn"])
         self.master = bool(config["master"])
-        
+
         assert(self.q_type in ["load", "store"]), "QueueType must be either 'load' or 'store'"
         assert(self.num_entries > 0), "NumEntries must be greater than 0"
+        assert(self.num_entries & (self.num_entries - 1)) == 0, f"NumEntries must be a power of 2, got {self.num_entries}"
         assert(self.data_width > 0), "DataWidth must be greater than 0"
         assert(self.addr_width > 0), "AddrWidth must be greater than 0"
         assert(self.id_width > 0), "IDWidth must be greater than 0"
