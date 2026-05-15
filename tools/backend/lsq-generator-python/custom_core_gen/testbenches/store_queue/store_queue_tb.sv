@@ -45,7 +45,6 @@ logic              mem_exec_valid_i;
 logic              mem_exec_ready_o;
 
 // Dependency checker
-logic allow_alloc_i;
 logic allow_access_i;
 
 // ===----------------------------------------------------------------------===
@@ -69,7 +68,6 @@ store_queue dut (
     .mem_data_ready_i (mem_data_ready_i),
     .mem_exec_valid_i (mem_exec_valid_i),
     .mem_exec_ready_o (mem_exec_ready_o),
-    .allow_alloc_i         (allow_alloc_i),
     .allow_access_i        (allow_access_i)
 );
 
@@ -131,7 +129,6 @@ task automatic reset();
     mem_addr_ready_i  = 0;
     mem_data_ready_i  = 0;
     mem_exec_valid_i  = 0;
-    allow_alloc_i         = 1;
     allow_access_i        = 1;
     repeat (3) tick();
     rst = 0;
@@ -188,28 +185,9 @@ initial begin
     check(empty_o, 1, "T3: empty after two stores complete");
 
     // ------------------------------------------------------------------
-    // TEST 4: allow_alloc_i = 0 blocks address allocation.
+    // TEST 4: Back-pressure on memory request stalls issue.
     // ------------------------------------------------------------------
     test_counter = 4;
-    reset();
-    allow_alloc_i        = 0;
-    circ_addr_i       = 32'hBEEF_0001;
-    circ_data_i          = 32'hBEEF_BEEF;
-    circ_addr_valid_i = 1;
-    circ_data_valid_i    = 1;
-    tick();
-    check(circ_addr_ready_o,  0, "T4: addr blocked when allow_alloc=0");
-    check(circ_data_ready_o,     0, "T4: data not ready (queue empty, no issueable entry)");
-    tick();
-    check(mem_addr_valid_o, 0, "T4: no request while blocked");
-    circ_addr_valid_i = 0;
-    circ_data_valid_i    = 0;
-    allow_alloc_i        = 1;
-
-    // ------------------------------------------------------------------
-    // TEST 5: Back-pressure on memory request stalls issue.
-    // ------------------------------------------------------------------
-    test_counter = 5;
     reset();
     mem_addr_ready_i = 0;
     port_send_addr(32'hCCCC_0001);
@@ -222,9 +200,9 @@ initial begin
     check(empty_o, 1, "T5: empty after un-stall");
 
     // ------------------------------------------------------------------
-    // TEST 6: Fill address buffer to capacity, check full condition.
+    // TEST 5: Fill address buffer to capacity, check full condition.
     // ------------------------------------------------------------------
-    test_counter = 6;
+    test_counter = 5;
     reset();
     allow_access_i = 0;
     port_send_addr(32'hF001_0001);
@@ -232,9 +210,9 @@ initial begin
     port_send_addr(32'hF001_0003);
     port_send_addr(32'hF001_0004);
     tick();
-    check(circ_addr_ready_o, 0, "T6: addr not ready when full");
-    check(circ_data_ready_o,    0, "T6: data not ready when full (mem_addr_ready=0)");
-    check(empty_o,              0, "T6: not empty when full");
+    check(circ_addr_ready_o, 0, "T5: addr not ready when full");
+    check(circ_data_ready_o,    0, "T5: data not ready when full (mem_addr_ready=0)");
+    check(empty_o,              0, "T5: not empty when full");
     allow_access_i = 1;
     begin
         mem_respond(32'hF001_0001, 32'hF001_F001);
@@ -244,27 +222,27 @@ initial begin
     end
 
     // ------------------------------------------------------------------
-    // TEST 7: allow_access_i = 0 blocks issue
+    // TEST 6: allow_access_i = 0 blocks issue
     // ------------------------------------------------------------------
-    test_counter = 7;
+    test_counter = 6;
     reset();
     allow_access_i = 0;
     fork
         port_send_addr(32'hEEEE_0001);
         begin
             tick();
-            check(mem_addr_valid_o, 0, "T7: no request when allow_access=0");
+            check(mem_addr_valid_o, 0, "T6: no request when allow_access=0");
             allow_access_i = 1;
             tick();
-            check(mem_addr_valid_o, 1, "T7: request fires after allow_access=1");
+            check(mem_addr_valid_o, 1, "T6: request fires after allow_access=1");
             mem_respond(32'hEEEE_0001, 32'hEEEE_EEEE);
         end
     join
 
     // ------------------------------------------------------------------
-    // TEST 8: Pre-queue addresses, then drain with memory model.
+    // TEST 7: Pre-queue addresses, then drain with memory model.
     // ------------------------------------------------------------------
-    test_counter = 8;
+    test_counter = 7;
     reset();
     port_send_addr(32'hAAAA_0001);
     port_send_addr(32'hAAAA_0002);
@@ -275,13 +253,13 @@ initial begin
         mem_respond(32'hAAAA_0003, 32'hDDDD_0003);
     end
     tick();
-    check(empty_o, 1, "T8: empty after stores complete");
+    check(empty_o, 1, "T7: empty after stores complete");
 
     // ------------------------------------------------------------------
-    // TEST 9: Stress — N stores, addr sender runs independently of memory.
+    // TEST 8: Stress — N stores, addr sender runs independently of memory.
     // mem_respond drives data in-band so data is always valid at issue time.
     // ------------------------------------------------------------------
-    test_counter = 9;
+    test_counter = 8;
     reset();
     begin
         localparam int N = 100;
@@ -312,8 +290,8 @@ initial begin
         join
 
         tick();
-        check(empty_o, 1, "T9: empty after stress test");
-        $display("T9: All %0d stores verified", N);
+        check(empty_o, 1, "T8: empty after stress test");
+        $display("T8: All %0d stores verified", N);
     end
 
     // ------------------------------------------------------------------

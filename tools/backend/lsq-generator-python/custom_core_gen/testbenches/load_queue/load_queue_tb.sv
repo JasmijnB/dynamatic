@@ -43,7 +43,6 @@ logic                 mem_data_ready_o;
 logic [DATA_W-1:0]    mem_data_i;
 
 // Dependency checker
-logic                 allow_alloc_i;
 logic                 allow_access_i;
 
 // ===----------------------------------------------------------------------===
@@ -65,7 +64,6 @@ load_queue dut (
     .mem_data_valid_i  (mem_data_valid_i),
     .mem_data_ready_o  (mem_data_ready_o),
     .mem_data_i        (mem_data_i),
-    .allow_alloc_i         (allow_alloc_i),
     .allow_access_i        (allow_access_i)
 );
 
@@ -137,7 +135,6 @@ task automatic reset();
     mem_addr_ready_i = 0;
     mem_data_valid_i  = 0;
     mem_data_i        = '0;
-    allow_alloc_i         = 1;
     allow_access_i        = 1;
     repeat (3) tick();
     rst = 0;
@@ -209,24 +206,9 @@ initial begin
     end
 
     // ------------------------------------------------------------------
-    // TEST 4: allow_alloc_i = 0 blocks allocation
+    // TEST 4: Back-pressure on memory request stalls issue
     // ------------------------------------------------------------------
     test_counter = 4;
-    reset();
-    allow_alloc_i        = 0;
-    circ_addr_i       = 32'hBEEF_0001;
-    circ_addr_valid_i = 1;
-    tick();
-    check(circ_addr_ready_o,  0, "T4: addr blocked when allow_alloc=0");
-    tick();
-    check(mem_addr_valid_o, 0, "T4: no request while blocked");
-    circ_addr_valid_i = 0;
-    allow_alloc_i        = 1;
-
-    // ------------------------------------------------------------------
-    // TEST 5: Back-pressure on memory request stalls issue
-    // ------------------------------------------------------------------
-    test_counter = 5;
     reset();
     begin
         logic [DATA_W-1:0] received;
@@ -235,9 +217,9 @@ initial begin
             port_send_addr(32'hCCCC_0001);
             begin
                 tick();
-                check(mem_addr_valid_o, 1, "T5: request asserted under back-pressure");
+                check(mem_addr_valid_o, 1, "T4: request asserted under back-pressure");
                 tick();
-                check(mem_addr_valid_o, 1, "T5: request held while not accepted");
+                check(mem_addr_valid_o, 1, "T4: request held while not accepted");
                 mem_addr_ready_i = 1;
                 tick();
                 mem_addr_ready_i = 0;
@@ -245,13 +227,13 @@ initial begin
             end
             port_recv_data(received);
         join
-        check(received, 32'hFACE_0001, "T5: correct data after un-stall");
+        check(received, 32'hFACE_0001, "T4: correct data after un-stall");
     end
 
     // ------------------------------------------------------------------
-    // TEST 6: Data back-pressure — kernel not ready stalls data response
+    // TEST 5: Data back-pressure — kernel not ready stalls data response
     // ------------------------------------------------------------------
-    test_counter = 6;
+    test_counter = 5;
     reset();
     begin
         logic [DATA_W-1:0] received;
@@ -266,24 +248,24 @@ initial begin
                 mem_data_valid_i = 1;
                 mem_data_i       = 32'hD47A_0001;
                 tick();
-                check(circ_data_valid_o, 1, "T6: data valid with kernel not ready");
+                check(circ_data_valid_o, 1, "T5: data valid with kernel not ready");
                 // Now signal kernel is ready
                 circ_data_ready_i = 1;
                 tick();
                 mem_data_valid_i = 0;
             end
             begin
-                check(mem_data_ready_o, 0, "T6: mem_data_ready reflects kernel not ready");
+                check(mem_data_ready_o, 0, "T5: mem_data_ready reflects kernel not ready");
                 port_recv_data(received);
             end
         join
-        check(received, 32'hD47A_0001, "T6: data received after kernel becomes ready");
+        check(received, 32'hD47A_0001, "T5: data received after kernel becomes ready");
     end
 
     // ------------------------------------------------------------------
-    // TEST 7: Fill queue to capacity, check full condition
+    // TEST 6: Fill queue to capacity, check full condition
     // ------------------------------------------------------------------
-    test_counter = 7;
+    test_counter = 6;
     reset();
     mem_addr_ready_i = 0;
     allow_access_i        = 0;
@@ -292,14 +274,14 @@ initial begin
     port_send_addr(32'hF001_0003);
     port_send_addr(32'hF001_0004);
     tick();
-    check(circ_addr_ready_o, 0, "T7: not ready when full");
-    check(empty_o,              0, "T7: not empty when full");
+    check(circ_addr_ready_o, 0, "T6: not ready when full");
+    check(empty_o,              0, "T6: not empty when full");
     allow_access_i = 1;
 
     // ------------------------------------------------------------------
-    // TEST 8: Two queued addresses, both issued before responses arrive
+    // TEST 7: Two queued addresses, both issued before responses arrive
     // ------------------------------------------------------------------
-    test_counter = 8;
+    test_counter = 7;
     reset();
     begin
         logic [DATA_W-1:0] d0, d1;
@@ -317,14 +299,14 @@ initial begin
                 port_recv_data(d1);
             end
         join
-        check(d0, 32'h1234_0001, "T8: first response data");
-        check(d1, 32'h1234_0002, "T8: second response data");
+        check(d0, 32'h1234_0001, "T7: first response data");
+        check(d1, 32'h1234_0002, "T7: second response data");
     end
 
     // ------------------------------------------------------------------
-    // TEST 9: 100 random loads with random pauses on all three channels
+    // TEST 8: 100 random loads with random pauses on all three channels
     // ------------------------------------------------------------------
-    test_counter = 9;
+    test_counter = 8;
     reset();
     begin
         localparam int N = 100;
@@ -362,14 +344,14 @@ initial begin
         join
 
         for (int i = 0; i < N; i++)
-            check(recv_buf[i], sent_addrs[i] + 1, $sformatf("T9: item %0d", i));
-        $display("T9: All %0d items verified", N);
+            check(recv_buf[i], sent_addrs[i] + 1, $sformatf("T8: item %0d", i));
+        $display("T8: All %0d items verified", N);
     end
 
     // ------------------------------------------------------------------
-    // TEST 10: Fill the queue then drain
+    // TEST 9: Fill the queue then drain
     // ------------------------------------------------------------------
-    test_counter = 10;
+    test_counter = 9;
     reset();
     begin
         logic [DATA_W-1:0] d0, d1, d2, d3;
@@ -392,10 +374,10 @@ initial begin
                 port_recv_data(d3);
             end
         join
-        check(d0, 32'h1111_0001, "T10: first data value");
-        check(d1, 32'h1111_0002, "T10: second data value");
-        check(d2, 32'h1111_0003, "T10: third data value");
-        check(d3, 32'h1111_0004, "T10: fourth data value");
+        check(d0, 32'h1111_0001, "T9: first data value");
+        check(d1, 32'h1111_0002, "T9: second data value");
+        check(d2, 32'h1111_0003, "T9: third data value");
+        check(d3, 32'h1111_0004, "T9: fourth data value");
     end
 
     // ------------------------------------------------------------------
