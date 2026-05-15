@@ -17,8 +17,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "dynamatic/Analysis/NameAnalysis.h"
+#include "dynamatic/Dialect/Handshake/HandshakeAttributes.h"
 #include "dynamatic/Dialect/Handshake/HandshakeDialect.h"
 #include "dynamatic/Dialect/Handshake/HandshakeOps.h"
+#include "dynamatic/Support/Attribute.h"
 #include "dynamatic/Support/CFG.h"
 #include "dynamatic/Support/DOT.h"
 #include "dynamatic/Support/Utils/Utils.h"
@@ -55,6 +57,11 @@ static cl::opt<std::string> timingDBFilepath(
         "the relative path (from the project's top-level directory) to the "
         "file defining the default timing models in Dynamatic."),
     cl::init("data/components.json"), cl::cat(mainCategory));
+
+static cl::opt<bool> dumpMemDep(
+    "mem-dep", cl::Optional,
+    cl::desc("Dump the memory dependency graph instead of the dataflow graph"),
+    cl::init(false), cl::cat(mainCategory));
 
 static cl::opt<DOTGraph::EdgeStyle> edgeStyle(
     "edge-style", cl::Optional,
@@ -445,6 +452,90 @@ static LogicalResult getDOTGraph(handshake::FuncOp funcOp, DOTGraph &graph) {
   return success();
 }
 
+/// Returns the dependency type string (RAW/WAR/WAW/RAR) for an edge between
+/// a source operation and the destination operation it points to.
+static std::string getDepType(Operation *srcOp, Operation *dstOp) {
+  bool srcIsLoad = isa<handshake::LoadOp>(srcOp);
+  bool dstIsLoad = isa<handshake::LoadOp>(dstOp);
+  if (!srcIsLoad && dstIsLoad)
+    return "RAW";
+  if (srcIsLoad && !dstIsLoad)
+    return "WAR";
+  if (!srcIsLoad && !dstIsLoad)
+    return "WAW";
+  return "RAR";
+}
+
+/// Builds a DOT graph representing the memory dependency graph of the given
+/// Handshake function. Each memory operation (load/store) becomes a node
+/// grouped by basic block. Each MemDependenceAttr on an op becomes a directed
+/// edge annotated with the dependency type, loop depth, and distance.
+static LogicalResult getMemDepDOTGraph(handshake::FuncOp funcOp,
+                                       NameAnalysis &nameAnalysis,
+                                       DOTGraph &graph) {
+  DOTGraph::Builder builder(graph);
+  llvm::DenseMap<unsigned, DOTGraph::Subgraph *> bbSubgraphs;
+  DOTGraph::Subgraph &root = builder.getRoot();
+
+  // First pass: create a node for every memory op.
+  for (Operation &op : funcOp.getOps()) {
+    if (!isa<handshake::LoadOp, handshake::StoreOp>(op))
+      continue;
+
+    StringRef name = getUniqueName(&op);
+    bool isLoad = isa<handshake::LoadOp>(op);
+
+    DOTGraph::Subgraph *subgraph = &root;
+    if (std::optional<unsigned> bb = getLogicBB(&op)) {
+      auto it = bbSubgraphs.find(*bb);
+      if (it != bbSubgraphs.end()) {
+        subgraph = it->second;
+      } else {
+        DOTGraph::Subgraph &sub =
+            builder.addSubgraph("cluster" + std::to_string(*bb), root);
+        sub.addAttr("label", "BB " + std::to_string(*bb));
+        bbSubgraphs.insert({*bb, &sub});
+        subgraph = &sub;
+      }
+    }
+
+    DOTGraph::Node *node = builder.addNode(name, *subgraph);
+    if (!node)
+      return op.emitError() << "failed to create memory dep node for operation";
+    node->addAttr("label", name);
+    node->addAttr("shape", "box");
+    node->addAttr("style", "filled");
+    node->addAttr("fillcolor", isLoad ? "lightblue" : "coral");
+    node->addAttr("mlir_op", op.getName().getStringRef());
+  }
+
+  // Second pass: create edges from MemDependenceArrayAttr annotations.
+  for (Operation &op : funcOp.getOps()) {
+    if (!isa<handshake::LoadOp, handshake::StoreOp>(op))
+      continue;
+
+    auto deps = getDialectAttr<MemDependenceArrayAttr>(&op);
+    if (!deps)
+      continue;
+
+    StringRef srcName = getUniqueName(&op);
+    for (handshake::MemDependenceAttr dep : deps.getDependencies()) {
+      StringRef dstName = dep.getDstAccess().getValue();
+      Operation *dstOp = nameAnalysis.getOp(dstName);
+      if (!dstOp)
+        return op.emitError()
+               << "memory dependency references unknown op '" << dstName << "'";
+
+      DOTGraph::Edge &edge = builder.addEdge(srcName, dstName, root);
+      edge.addAttr("label", getDepType(&op, dstOp) + " d=" +
+                                 std::to_string(dep.getDistance()) + " l=" +
+                                 std::to_string(dep.getLoopDepth()));
+    }
+  }
+
+  return success();
+}
+
 int main(int argc, char **argv) {
   InitLLVM y(argc, argv);
 
@@ -498,8 +589,13 @@ int main(int argc, char **argv) {
   nameAnalysis.nameAllUnnamedOps();
 
   DOTGraph graph;
-  if (failed(getDOTGraph(funcOp, graph)))
-    return 1;
+  if (dumpMemDep) {
+    if (failed(getMemDepDOTGraph(funcOp, nameAnalysis, graph)))
+      return 1;
+  } else {
+    if (failed(getDOTGraph(funcOp, graph)))
+      return 1;
+  }
 
   graph.print(llvm::outs(), edgeStyle);
   return 0;

@@ -71,12 +71,24 @@ export_dot() {
   local f_dot="$COMP_DIR/$2.dot"
   local f_png="$COMP_DIR/$2.png"
 
-  # Export to DOT
   "$DYNAMATIC_EXPORT_DOT_BIN" "$f_handshake" "--edge-style=spline" "--label-type=uname" \
     > "$f_dot"
   exit_on_fail "Failed to create $2 DOT" "Created $2 DOT"
 
-  # Convert DOT graph to PNG
+  dot -Tpng "$f_dot" > "$f_png"
+  exit_on_fail "Failed to convert $2 DOT to PNG" "Converted $2 DOT to PNG"
+  return 0
+}
+
+export_mem_dot() {
+  local f_handshake="$1"
+  local f_dot="$COMP_DIR/$2.dot"
+  local f_png="$COMP_DIR/$2.png"
+
+  "$DYNAMATIC_EXPORT_DOT_BIN" "$f_handshake" "--mem-dep" \
+    > "$f_dot"
+  exit_on_fail "Failed to create $2 DOT" "Created $2 DOT"
+
   dot -Tpng "$f_dot" > "$f_png"
   exit_on_fail "Failed to convert $2 DOT to PNG" "Converted $2 DOT to PNG"
   return 0
@@ -349,6 +361,7 @@ exit_on_fail "Failed to canonicalize Handshake" "Canonicalized handshake"
 
 # Export to DOT
 export_dot "$F_HANDSHAKE_EXPORT" "$KERNEL_NAME"
+export_mem_dot "$F_HANDSHAKE_EXPORT" "${KERNEL_NAME}_mem_dep"
 export_cfg "$F_CF_TRANSFORMED" "${KERNEL_NAME}_CFG"
 
 if [[ $USE_RIGIDIFICATION -ne 0 ]]; then

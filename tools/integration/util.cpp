@@ -265,6 +265,19 @@ bool runSpecIntegrationTest(const std::string &name, int &outSimTime) {
     return false;
   }
 
+  fs::path memDepDotFile = compOutDir / (name + "_mem_dep.dot");
+  if (!runSubprocess({EXPORT_DOT_BIN, handshakeExport.string(), "--mem-dep"},
+                     memDepDotFile)) {
+    std::cerr << "Failed to export memory dependency dot file\n";
+    return false;
+  }
+
+  fs::path memDepPngFile = compOutDir / (name + "_mem_dep.png");
+  if (!runSubprocess({"dot", "-Tpng", memDepDotFile.string()}, memDepPngFile)) {
+    std::cerr << "Failed to create memory dependency PNG file\n";
+    return false;
+  }
+
   fs::path hw = compOutDir / "hw.mlir";
   if (!runSubprocess({DYNAMATIC_OPT_BIN, handshakeExport.string(),
                       "--lower-handshake-to-hw"},
