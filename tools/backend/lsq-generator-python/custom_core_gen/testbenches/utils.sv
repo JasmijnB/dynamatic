@@ -20,3 +20,6 @@ endtask
 
 // Advance one clock cycle, settle 1 ns after the posedge.
 task automatic tick; @(posedge clk); #1; endtask
+
+// Advance n clock cycles.
+task automatic ticks(input int n); repeat(n) tick(); endtask
