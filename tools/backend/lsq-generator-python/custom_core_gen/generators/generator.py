@@ -25,9 +25,10 @@ class Generator:
         self.ports[key] = signal
         return signal
 
-    def _write_to_file(self, em: Emitter, path_rtl: str) -> None:
+    def _write_to_file(self, em: Emitter, path_rtl: str, out_file: str = None) -> None:
         output_str = em.get_definition_str(self.module_name)
-        with open(f"{path_rtl}/{self.name}.{em.get_file_suffix()}", "a") as file:
+        path = out_file if out_file is not None else f"{path_rtl}/{self.name}.{em.get_file_suffix()}"
+        with open(path, "a") as file:
             file.write(output_str)
 
     def get_ports(self) -> dict:

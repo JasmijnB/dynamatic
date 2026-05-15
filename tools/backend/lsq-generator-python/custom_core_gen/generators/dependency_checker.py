@@ -10,7 +10,7 @@ class DependencyChecker(Generator):
     def __init__(self, name: str, suffix: str, configs: DependencyCheckerConfig):
         super().__init__(name, suffix, configs)
 
-    def generate(self, em: Emitter, path_rtl) -> None:
+    def generate(self, em: Emitter, path_rtl, out_file: str = None) -> None:
         self.ports.clear()
 
         pq_ptr_width = self.configs.pq.q_addr_width + 1
@@ -76,4 +76,4 @@ class DependencyChecker(Generator):
         max_ad_val = (1 << (self.configs.access_disparity_width - 1)) - 1
         em.add_assignment(allow_sq_access_o, (tail_offset != Val(0, pq_ptr_width)) & (~conflict | (access_disparity < Val(0))) & (access_disparity <= Val(max_ad_val)))
 
-        self._write_to_file(em, path_rtl)
+        self._write_to_file(em, path_rtl, out_file)

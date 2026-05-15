@@ -11,7 +11,7 @@ class Queue(Generator):
         super().__init__(name, suffix, configs)
 
 
-    def generate(self, em: Emitter, path_rtl) -> None:
+    def generate(self, em: Emitter, path_rtl, out_file: str = None) -> None:
         self.ports.clear()
         is_store = self.configs.q_type == "store"
 
@@ -103,7 +103,7 @@ class Queue(Generator):
         if self.configs.master:
             self._generate_master_interface(em, q_empty)
 
-        self._write_to_file(em, path_rtl)
+        self._write_to_file(em, path_rtl, out_file)
 
     # ===----------------------------------------------------------------------===
     # Shared helpers
@@ -298,8 +298,9 @@ end
         em.add_assignment(done_en_o,   done_en)
         em.add_assignment(access_en_o, load_en)
 
-    def _write_to_file(self, em: Emitter, path_rtl: str):
+    def _write_to_file(self, em: Emitter, path_rtl: str, out_file: str = None):
         output_str = em.get_definition_str(self.module_name)
-        with open(f"{path_rtl}/{self.name}.{em.get_file_suffix()}", "a") as file:
+        path = out_file if out_file is not None else f"{path_rtl}/{self.name}.{em.get_file_suffix()}"
+        with open(path, "a") as file:
             file.write(output_str)
 

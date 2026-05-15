@@ -120,6 +120,8 @@ class Structure(Generator):
         self.configs = configs
         
     def generate_from_dot(self, em, dot_path, out_path, configs):
+        out_file = f"{out_path}/{self.name}.{em.get_file_suffix()}"
+
         graphs = pydot.graph_from_dot_file(dot_path)
         graph = graphs[0]
 
@@ -151,7 +153,7 @@ class Structure(Generator):
         queue_defs = {}
         for config_id in sorted(set(node_config_ids.values())):
             q_def = Queue(name=f"queue_{config_id}", suffix="", configs=QueueConfig(configs[f'queue_{config_id}']))
-            q_def.generate(em.new(), path_rtl=out_path)
+            q_def.generate(em.new(), path_rtl=out_path, out_file=out_file)
             queue_defs[config_id] = q_def
 
         # Generate one DependencyChecker def per unique (dc_id, pq_config_id, sq_config_id) triple
@@ -171,7 +173,7 @@ class Structure(Generator):
                     suffix="",
                     configs=dc_config,
                 )
-                dc_def.generate(em.new(), path_rtl=out_path)
+                dc_def.generate(em.new(), path_rtl=out_path, out_file=out_file)
                 dc_def_map[key] = dc_def
 
         # Validate port maps against any one representative def
@@ -241,4 +243,4 @@ class Structure(Generator):
         for dp_checker in dp_checkers:
             dp_checker.instantate(em)
 
-        self._write_to_file(em, out_path)
+        self._write_to_file(em, out_path, out_file)
