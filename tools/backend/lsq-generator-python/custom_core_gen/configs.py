@@ -8,6 +8,7 @@ class QueueConfig:
     addr_width:     int = 13  # Address width     (Number of bits for memory address)
     id_width:       int = 2  # ID width          (Number of bits for ID in the memory interface)
     id_val:         int = 0  # ID value          (ID value used for all requests in the queue)
+    bb_id:          int = 0  # Basic block ID    (Basic block this queue belongs to)
     
     q_addr_width: int = 2  # queue address width
 
@@ -26,6 +27,7 @@ class QueueConfig:
         self.addr_width = config["AddrWidth"]
         self.id_width = config["IDWidth"]
         self.id_val = config["IDVal"]
+        self.bb_id = config.get("BasicBlockID", 0)
         self.ldp_addr_width = config["LDPAddrWidth"]
         self.st_resp = config["StResp"]
 
