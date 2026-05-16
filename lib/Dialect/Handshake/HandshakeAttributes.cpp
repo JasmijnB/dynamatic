@@ -25,7 +25,7 @@ using namespace dynamatic::handshake;
 //===----------------------------------------------------------------------===//
 
 void MemInterfaceAttr::print(AsmPrinter &odsPrinter) const {
-  std::optional<unsigned> group = getLsqGroup();
+  std::optional<unsigned> group = getGroup();
   if (group)
     odsPrinter << "<LSQ: " << *group << ">";
   else

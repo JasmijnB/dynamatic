@@ -185,7 +185,7 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::replaceForMemRef(
     if (memAttr.connectsToMC())
       memBuilder.addMCPort(portOp);
     else
-      memBuilder.addLSQPort(*memAttr.getLsqGroup(), portOp);
+      memBuilder.addLSQPort(*memAttr.getGroup(), portOp);
   }
 
   // Instantiate new memory interfaces

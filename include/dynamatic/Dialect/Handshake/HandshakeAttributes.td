@@ -165,7 +165,7 @@ def MemInterfaceAttr : Handshake_Attr<"MemInterface", "mem_interface"> {
     have determined dependency relations between this access and  others on the
     same memory region.
   }];
-  let parameters = (ins "::std::optional<unsigned>":$lsqGroup);
+  let parameters = (ins "::std::optional<unsigned>":$group);
   let builders = [AttrBuilder<(ins), "return $_get(context, std::nullopt);">];
 
   let hasCustomAssemblyFormat = 1;
@@ -173,7 +173,7 @@ def MemInterfaceAttr : Handshake_Attr<"MemInterface", "mem_interface"> {
     /// Determines whether the memory port the attribite is attached to should
     /// connect to a load-store queue (LSQ).
     inline bool connectsToLSQ() {
-      return getLsqGroup().has_value();
+      return getGroup().has_value();
     }
 
     /// Determines whether the memory port the attribite is attached to should
