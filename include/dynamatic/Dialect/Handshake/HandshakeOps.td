@@ -1068,6 +1068,47 @@ def LSQOp : Handshake_Op<"lsq", [
   }];
 }
 
+def MemoryOrderingUnitOp : Handshake_Op<"mem_ordering_unit", [
+  DeclareOpInterfaceMethods<MemoryOpInterface>,
+  // TODO: What does this do?
+  DeclareOpInterfaceMethods<NamedIOInterface, ["getOperandName"]>,
+  DeclareOpInterfaceMethods<NamedIOInterface, ["getResultName"]>
+]> {
+  let summary = "memory ordering unit (dynamatic)";
+  // TODO: Actually write a proper description :)
+  let description = [{
+    Each `MemoryOrderingUnitOp` has the same functionality as an LSQ, but instead of
+    consisting of a general-purpse queue, it implements specific checks for each dependency in the
+    memory group
+  }];
+
+  let arguments = (ins Variadic<AnyType>:$inputs, I32ArrayAttr:$groupSizes);
+  let results = (outs Variadic<HandshakeType>:$outputs);
+
+  let builders = [
+    OpBuilder<(ins "Value":$memref, "Value":$memStart, "ValueRange":$inputs,
+                   "Value":$ctrlEnd, "ArrayRef<unsigned>":$groupSizes, "unsigned":$numLoads)>,
+    OpBuilder<(ins "::dynamatic::handshake::MemoryControllerOp":$mcOp,
+                   "ValueRange":$inputs, "ArrayRef<unsigned>":$groupSizes,
+                   "unsigned":$numLoads)>,
+  ];
+  let hasVerifier = 1;
+  let hasCustomAssemblyFormat = 1;
+
+  // TODO: Add extra declarations if necessary
+  let extraClassDeclaration = [{
+  }];
+
+  // TODO: Add extra definitions if necessary
+  let extraClassDefinition = [{
+    ::mlir::FailureOr<::llvm::SmallVector<::mlir::NamedAttribute>>
+    MemoryOrderingUnitOp::getRTLParameters() {
+      return ::llvm::SmallVector<::mlir::NamedAttribute>{
+      };
+    }
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // Memory ports
 //===----------------------------------------------------------------------===//

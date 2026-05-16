@@ -364,6 +364,39 @@ TypedValue<ControlType> LSQOp::getCtrlEnd() {
   return cast<TypedValue<ControlType>>(getOperands().back());
 }
 
+// TODO: Implement
+std::string handshake::MemoryOrderingUnitOp::getOperandName(unsigned idx) {
+  return "";
+}
+
+// TODO: Implement
+std::string handshake::MemoryOrderingUnitOp::getResultName(unsigned idx) {
+  return "";
+}
+
+// TODO: Implement
+bool MemoryOrderingUnitOp::isMasterInterface() { return false; }
+
+// TODO: Implement
+TypedValue<MemRefType> MemoryOrderingUnitOp::getMemRef() {
+  llvm_unreachable("TODO");
+}
+
+// TODO: Implement
+TypedValue<ControlType> MemoryOrderingUnitOp::getMemStart() {
+  llvm_unreachable("TODO");
+}
+
+// TODO: Implement
+TypedValue<ControlType> MemoryOrderingUnitOp::getMemEnd() {
+  llvm_unreachable("TODO");
+}
+
+// TODO: Implement
+TypedValue<ControlType> MemoryOrderingUnitOp::getCtrlEnd() {
+  llvm_unreachable("TODO");
+}
+
 //===----------------------------------------------------------------------===//
 // EagerForkLikeOpInterface
 //===----------------------------------------------------------------------===//

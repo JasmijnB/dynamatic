@@ -41,6 +41,7 @@ class LoadOp;
 class StoreOp;
 class MemoryControllerOp;
 class LSQOp;
+class MemoryUnitOp;
 
 } // end namespace handshake
 } // end namespace dynamatic
