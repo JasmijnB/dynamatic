@@ -76,7 +76,7 @@ struct ForceMemoryInterfacePass
       else
         lsqGroups[block] = groupID = nextGroupID++;
 
-      setDialectAttr<handshake::MemInterfaceAttr>(op, ctx, groupID);
+      setDialectAttr<handshake::MemInterfaceAttr>(op, ctx, groupID, handshake::MemOrderingKind::LSQ);
     });
   }
 };

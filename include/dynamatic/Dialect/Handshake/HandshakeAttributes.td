@@ -151,6 +151,19 @@ class OperandContainerAttr<string name, string attrMnemonic, list<Trait> traits 
 //===----------------------------------------------------------------------===//
 // Memory annotations
 //===----------------------------------------------------------------------===//
+def MemOrderingKindEnum : I64EnumAttr<"MemOrderingKind", "", [
+  // C++ value is MemOrderingKind::Mem, string version is "mem"
+  I64EnumAttrCase<"Mem", 0, "mem">,
+  // C++ value is MemOrderingKind::LSQ, string version is "lsq"
+  I64EnumAttrCase<"LSQ", 1, "lsq">,
+  // C++ value is MemOrderingKind::MOU, string version is "mou"
+  I64EnumAttrCase<"MOU", 2, "mou">
+]> {
+  let cppNamespace = "::dynamatic::handshake";
+  let genSpecializedAttr = 0;
+}
+// and then we pass that "fake" attribute to this, which is the real attribute
+def MemOrderingKindEnumAttr : EnumAttr<Handshake_Dialect, MemOrderingKindEnum, "mem_ordering_kind">;
 
 def MemInterfaceAttr : Handshake_Attr<"MemInterface", "mem_interface"> {
   let summary = [{
@@ -160,26 +173,32 @@ def MemInterfaceAttr : Handshake_Attr<"MemInterface", "mem_interface"> {
   let description = [{
     When attached to an operation representing some kind of memory access, this
     instructs the cf-to-handshake conversion pass to connect the memory port to
-    a MC (no LSQ group provided) or to a particular LSQ group (LSQ group
-    provided). Usually, this would be set by a memory analysis pass that would
-    have determined dependency relations between this access and  others on the
-    same memory region.
+    a MC (`Mem` kind, no group), a particular LSQ group (`LSQ` kind with group
+    ID), or a particular MOU group (`MOU` kind with group ID). Usually, this
+    would be set by a memory analysis pass that would have determined dependency
+    relations between this access and others on the same memory region.
   }];
-  let parameters = (ins "::std::optional<unsigned>":$group);
-  let builders = [AttrBuilder<(ins), "return $_get(context, std::nullopt);">];
+  let parameters = (ins "::std::optional<unsigned>":$group,
+                       "::dynamatic::handshake::MemOrderingKind":$orderingKind);
+  let builders = [
+    AttrBuilder<(ins),
+      "return $_get(context, std::nullopt, ::dynamatic::handshake::MemOrderingKind::Mem);">,
+    AttrBuilder<(ins "unsigned":$group,
+                     "::dynamatic::handshake::MemOrderingKind":$kind),
+      "return $_get(context, group, kind);">
+  ];
 
   let hasCustomAssemblyFormat = 1;
+  let genVerifyDecl = 1;
   let extraClassDeclaration = [{
-    /// Determines whether the memory port the attribite is attached to should
-    /// connect to a load-store queue (LSQ).
-    inline bool connectsToLSQ() {
-      return getGroup().has_value();
-    }
-
-    /// Determines whether the memory port the attribite is attached to should
-    /// connect to a memory controller (MC).
     inline bool connectsToMC() {
-      return !connectsToLSQ();
+      return getOrderingKind() == ::dynamatic::handshake::MemOrderingKind::Mem;
+    }
+    inline bool connectsToLSQ() {
+      return getOrderingKind() == ::dynamatic::handshake::MemOrderingKind::LSQ;
+    }
+    inline bool connectsToMOU() {
+      return getOrderingKind() == ::dynamatic::handshake::MemOrderingKind::MOU;
     }
   }];
 }

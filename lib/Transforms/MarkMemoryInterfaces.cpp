@@ -167,6 +167,6 @@ void MarkMemoryInterfacesPass::markMemoryInterfaces(func::FuncOp funcOp) {
     for (Operation *mcMemOp : regionInterfaces.connectToMC)
       setDialectAttr<MemInterfaceAttr>(mcMemOp, ctx);
     for (auto &[lsqMemOp, groupID] : regionInterfaces.connectToLSQ)
-      setDialectAttr<MemInterfaceAttr>(lsqMemOp, ctx, groupID);
+      setDialectAttr<MemInterfaceAttr>(lsqMemOp, ctx, groupID, MemOrderingKind::LSQ);
   }
 }

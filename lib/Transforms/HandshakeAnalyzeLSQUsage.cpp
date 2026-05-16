@@ -182,7 +182,7 @@ static void markLSQPorts(const DenseSet<Op> &accesses,
                          MLIRContext *ctx) {
   for (Op accessOp : accesses) {
     if (dependentAccesses.contains(accessOp))
-      setDialectAttr<MemInterfaceAttr>(accessOp, ctx, groupMap.at(accessOp));
+      setDialectAttr<MemInterfaceAttr>(accessOp, ctx, groupMap.at(accessOp), MemOrderingKind::LSQ);
     else
       setDialectAttr<MemInterfaceAttr>(accessOp, ctx);
   }

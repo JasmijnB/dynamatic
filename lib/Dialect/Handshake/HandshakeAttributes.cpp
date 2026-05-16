@@ -25,11 +25,17 @@ using namespace dynamatic::handshake;
 //===----------------------------------------------------------------------===//
 
 void MemInterfaceAttr::print(AsmPrinter &odsPrinter) const {
-  std::optional<unsigned> group = getGroup();
-  if (group)
-    odsPrinter << "<LSQ: " << *group << ">";
-  else
+  switch (getOrderingKind()) {
+  case MemOrderingKind::Mem:
     odsPrinter << "<MC>";
+    break;
+  case MemOrderingKind::LSQ:
+    odsPrinter << "<LSQ: " << *getGroup() << ">";
+    break;
+  case MemOrderingKind::MOU:
+    odsPrinter << "<MOU: " << *getGroup() << ">";
+    break;
+  }
 }
 
 Attribute MemInterfaceAttr::parse(AsmParser &odsParser, Type odsType) {
@@ -37,19 +43,35 @@ Attribute MemInterfaceAttr::parse(AsmParser &odsParser, Type odsType) {
   if (odsParser.parseLess())
     return nullptr;
 
-  // Check whether the attributes indicates a connection to an MC
-  if (!odsParser.parseOptionalKeyword("MC") && !odsParser.parseGreater())
+  if (!odsParser.parseOptionalKeyword("MC")) {
+    if (odsParser.parseGreater())
+      return nullptr;
     return MemInterfaceAttr::get(ctx);
+  }
 
-  // If this is not to an MC it must be to an LSQ (LSQ: <group>)
+  MemOrderingKind kind;
+  if (!odsParser.parseOptionalKeyword("LSQ"))
+    kind = MemOrderingKind::LSQ;
+  else if (!odsParser.parseOptionalKeyword("MOU"))
+    kind = MemOrderingKind::MOU;
+  else
+    return nullptr;
+
   unsigned group = 0;
-  if (odsParser.parseOptionalKeyword("LSQ") || odsParser.parseColon() ||
-      odsParser.parseInteger(group))
+  if (odsParser.parseColon() || odsParser.parseInteger(group) ||
+      odsParser.parseGreater())
     return nullptr;
+  return MemInterfaceAttr::get(ctx, group, kind);
+}
 
-  if (odsParser.parseGreater())
-    return nullptr;
-  return MemInterfaceAttr::get(ctx, group);
+LogicalResult MemInterfaceAttr::verify(
+    function_ref<InFlightDiagnostic()> emitError,
+    std::optional<unsigned> group, MemOrderingKind orderingKind) {
+  if (orderingKind == MemOrderingKind::Mem && group.has_value())
+    return emitError() << "'mem' kind must not have a group ID";
+  if (orderingKind != MemOrderingKind::Mem && !group.has_value())
+    return emitError() << "'lsq' and 'mou' kinds require a group ID";
+  return success();
 }
 
 //===----------------------------------------------------------------------===//
