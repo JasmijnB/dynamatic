@@ -156,8 +156,8 @@ def MemOrderingKindEnum : I64EnumAttr<"MemOrderingKind", "", [
   I64EnumAttrCase<"Mem", 0, "mem">,
   // C++ value is MemOrderingKind::LSQ, string version is "lsq"
   I64EnumAttrCase<"LSQ", 1, "lsq">,
-  // C++ value is MemOrderingKind::MOU, string version is "mou"
-  I64EnumAttrCase<"MOU", 2, "mou">
+  // C++ value is MemOrderingKind::OrderingNetwork, string version is "ordering_network"
+  I64EnumAttrCase<"OrderingNetwork", 2, "ordering_network">
 ]> {
   let cppNamespace = "::dynamatic::handshake";
   let genSpecializedAttr = 0;
@@ -174,7 +174,7 @@ def MemInterfaceAttr : Handshake_Attr<"MemInterface", "mem_interface"> {
     When attached to an operation representing some kind of memory access, this
     instructs the cf-to-handshake conversion pass to connect the memory port to
     a MC (`Mem` kind, no group), a particular LSQ group (`LSQ` kind with group
-    ID), or a particular MOU group (`MOU` kind with group ID). Usually, this
+    ID), or a particular ordering network group (`OrderingNetwork` kind with group ID). Usually, this
     would be set by a memory analysis pass that would have determined dependency
     relations between this access and others on the same memory region.
   }];
@@ -197,8 +197,8 @@ def MemInterfaceAttr : Handshake_Attr<"MemInterface", "mem_interface"> {
     inline bool connectsToLSQ() {
       return getOrderingKind() == ::dynamatic::handshake::MemOrderingKind::LSQ;
     }
-    inline bool connectsToMOU() {
-      return getOrderingKind() == ::dynamatic::handshake::MemOrderingKind::MOU;
+    inline bool connectsToOrderingNetwork() {
+      return getOrderingKind() == ::dynamatic::handshake::MemOrderingKind::OrderingNetwork;
     }
   }];
 }

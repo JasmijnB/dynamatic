@@ -32,8 +32,8 @@ void MemInterfaceAttr::print(AsmPrinter &odsPrinter) const {
   case MemOrderingKind::LSQ:
     odsPrinter << "<LSQ: " << *getGroup() << ">";
     break;
-  case MemOrderingKind::MOU:
-    odsPrinter << "<MOU: " << *getGroup() << ">";
+  case MemOrderingKind::OrderingNetwork:
+    odsPrinter << "<OrderingNetwork: " << *getGroup() << ">";
     break;
   }
 }
@@ -52,8 +52,8 @@ Attribute MemInterfaceAttr::parse(AsmParser &odsParser, Type odsType) {
   MemOrderingKind kind;
   if (!odsParser.parseOptionalKeyword("LSQ"))
     kind = MemOrderingKind::LSQ;
-  else if (!odsParser.parseOptionalKeyword("MOU"))
-    kind = MemOrderingKind::MOU;
+  else if (!odsParser.parseOptionalKeyword("OrderingNetwork"))
+    kind = MemOrderingKind::OrderingNetwork;
   else
     return nullptr;
 
@@ -70,7 +70,7 @@ LogicalResult MemInterfaceAttr::verify(
   if (orderingKind == MemOrderingKind::Mem && group.has_value())
     return emitError() << "'mem' kind must not have a group ID";
   if (orderingKind != MemOrderingKind::Mem && !group.has_value())
-    return emitError() << "'lsq' and 'mou' kinds require a group ID";
+    return emitError() << "'lsq' and 'ordering_network' kinds require a group ID";
   return success();
 }
 

@@ -1068,17 +1068,17 @@ def LSQOp : Handshake_Op<"lsq", [
   }];
 }
 
-def MemoryOrderingUnitOp : Handshake_Op<"mem_ordering_unit", [
+def OrderingNetworkOp : Handshake_Op<"ordering_network", [
   DeclareOpInterfaceMethods<MemoryOpInterface>,
   // TODO: What does this do?
   DeclareOpInterfaceMethods<NamedIOInterface, ["getOperandName"]>,
   DeclareOpInterfaceMethods<NamedIOInterface, ["getResultName"]>
 ]> {
-  let summary = "memory ordering unit (dynamatic)";
+  let summary = "ordering network (dynamatic)";
   // TODO: Actually write a proper description :)
   let description = [{
-    Each `MemoryOrderingUnitOp` has the same functionality as an LSQ, but instead of
-    consisting of a general-purpse queue, it implements specific checks for each dependency in the
+    Each `OrderingNetworkOp` has the same functionality as an LSQ, but instead of
+    consisting of a general-purpose queue, it implements specific checks for each dependency in the
     memory group
   }];
 
@@ -1102,7 +1102,7 @@ def MemoryOrderingUnitOp : Handshake_Op<"mem_ordering_unit", [
   // TODO: Add extra definitions if necessary
   let extraClassDefinition = [{
     ::mlir::FailureOr<::llvm::SmallVector<::mlir::NamedAttribute>>
-    MemoryOrderingUnitOp::getRTLParameters() {
+    OrderingNetworkOp::getRTLParameters() {
       return ::llvm::SmallVector<::mlir::NamedAttribute>{
       };
     }

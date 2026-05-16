@@ -365,35 +365,35 @@ TypedValue<ControlType> LSQOp::getCtrlEnd() {
 }
 
 // TODO: Implement
-std::string handshake::MemoryOrderingUnitOp::getOperandName(unsigned idx) {
+std::string handshake::OrderingNetworkOp::getOperandName(unsigned idx) {
   return "";
 }
 
 // TODO: Implement
-std::string handshake::MemoryOrderingUnitOp::getResultName(unsigned idx) {
+std::string handshake::OrderingNetworkOp::getResultName(unsigned idx) {
   return "";
 }
 
 // TODO: Implement
-bool MemoryOrderingUnitOp::isMasterInterface() { return false; }
+bool OrderingNetworkOp::isMasterInterface() { return false; }
 
 // TODO: Implement
-TypedValue<MemRefType> MemoryOrderingUnitOp::getMemRef() {
+TypedValue<MemRefType> OrderingNetworkOp::getMemRef() {
   llvm_unreachable("TODO");
 }
 
 // TODO: Implement
-TypedValue<ControlType> MemoryOrderingUnitOp::getMemStart() {
+TypedValue<ControlType> OrderingNetworkOp::getMemStart() {
   llvm_unreachable("TODO");
 }
 
 // TODO: Implement
-TypedValue<ControlType> MemoryOrderingUnitOp::getMemEnd() {
+TypedValue<ControlType> OrderingNetworkOp::getMemEnd() {
   llvm_unreachable("TODO");
 }
 
 // TODO: Implement
-TypedValue<ControlType> MemoryOrderingUnitOp::getCtrlEnd() {
+TypedValue<ControlType> OrderingNetworkOp::getCtrlEnd() {
   llvm_unreachable("TODO");
 }
 

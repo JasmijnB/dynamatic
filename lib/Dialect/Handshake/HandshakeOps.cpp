@@ -1377,18 +1377,18 @@ SmallVector<Value> LSQOp::getControlPaths(Operation *ctrlOp) {
 }
 
 //===----------------------------------------------------------------------===//
-// MemoryOrderingUnitOp
+// OrderingNetworkOp
 //===----------------------------------------------------------------------===//
 
 // TODO: Implement
-void MemoryOrderingUnitOp::build(OpBuilder &odsBuilder,
+void OrderingNetworkOp::build(OpBuilder &odsBuilder,
                                  OperationState &odsState, Value memref,
                                  Value memStart, ValueRange inputs,
                                  Value ctrlEnd, ArrayRef<unsigned> groupSizes,
                                  unsigned numLoads) {}
 
 // TODO: Implement
-void MemoryOrderingUnitOp::build(OpBuilder &odsBuilder,
+void OrderingNetworkOp::build(OpBuilder &odsBuilder,
                                  OperationState &odsState,
                                  handshake::MemoryControllerOp mcOp,
                                  ValueRange inputs,
@@ -1396,16 +1396,16 @@ void MemoryOrderingUnitOp::build(OpBuilder &odsBuilder,
                                  unsigned numLoads) {}
 
 // TODO: Implement
-ParseResult MemoryOrderingUnitOp::parse(OpAsmParser &parser,
+ParseResult OrderingNetworkOp::parse(OpAsmParser &parser,
                                         OperationState &result) {
   return success();
 }
 
 // TODO: Implement
-void MemoryOrderingUnitOp::print(OpAsmPrinter &p) {}
+void OrderingNetworkOp::print(OpAsmPrinter &p) {}
 
 // TODO: Implement
-LogicalResult MemoryOrderingUnitOp::verify() { return success(); }
+LogicalResult OrderingNetworkOp::verify() { return success(); }
 
 //===----------------------------------------------------------------------===//
 // Specific port kinds
