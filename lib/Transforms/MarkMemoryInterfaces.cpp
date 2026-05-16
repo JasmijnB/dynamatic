@@ -55,7 +55,7 @@ struct RegionInterfaces {
   /// Holds operations that should connect to a memory controller.
   DenseSet<Operation *> connectToMC;
   /// Mpas operations that should connect to a specific LSQ group.
-  DenseMap<Operation *, unsigned> connectToLSQ;
+  DenseMap<Operation *, unsigned> connectToMemoryOrderingUnit;
 
   /// Default constructor.
   RegionInterfaces() = default;
@@ -68,12 +68,12 @@ struct RegionInterfaces {
   /// (every operation from the same block will belong to the same LSQ group).
   /// If the operation was already part of the set that should connect to a
   /// memory controller, removes it from there.
-  void connectAccessToLSQ(Operation *memOp);
+  void connectAccessToMemoryOrderingUnit(Operation *memOp);
 
 private:
   /// Maps parent blocks of memory operations to a unique group ID. Determines
   /// the LSQ group memory accesses should belong to.
-  DenseMap<Block *, unsigned> lsqGroups;
+  DenseMap<Block *, unsigned> groups;
 };
 
 /// Maps distinct memory region to their memory interface connectivity needs.
@@ -84,6 +84,8 @@ using MemInterfaces = DenseMap<Value, RegionInterfaces>;
 struct MarkMemoryInterfacesPass
     : public dynamatic::impl::MarkMemoryInterfacesBase<
           MarkMemoryInterfacesPass> {
+
+  using MarkMemoryInterfacesBase::MarkMemoryInterfacesBase;
 
   void runDynamaticPass() override {
     for (func::FuncOp funcOp : getOperation().getOps<func::FuncOp>())
@@ -103,11 +105,11 @@ private:
 } // namespace
 
 void RegionInterfaces::connectAccessToMC(Operation *memOp) {
-  if (!connectToLSQ.contains(memOp))
+  if (!connectToMemoryOrderingUnit.contains(memOp))
     connectToMC.insert(memOp);
 }
 
-void RegionInterfaces::connectAccessToLSQ(Operation *memOp) {
+void RegionInterfaces::connectAccessToMemoryOrderingUnit(Operation *memOp) {
   if (connectToMC.contains(memOp))
     connectToMC.erase(memOp);
 
@@ -117,11 +119,11 @@ void RegionInterfaces::connectAccessToLSQ(Operation *memOp) {
   // Try to find the block's group ID. Failing that, assign a new group ID
   // to the block (the absolute ID doesn't matter, it just has to be different
   // from the others)
-  if (auto groupIt = lsqGroups.find(block); groupIt != lsqGroups.end())
+  if (auto groupIt = groups.find(block); groupIt != groups.end())
     groupID = groupIt->second;
   else
-    lsqGroups[block] = groupID = lsqGroups.size();
-  connectToLSQ[memOp] = groupID;
+    groups[block] = groupID = groups.size();
+  connectToMemoryOrderingUnit[memOp] = groupID;
 }
 
 void MarkMemoryInterfacesPass::markMemoryInterfaces(func::FuncOp funcOp) {
@@ -152,8 +154,8 @@ void MarkMemoryInterfacesPass::markMemoryInterfaces(func::FuncOp funcOp) {
         Operation *dstOp = nameAnalysis.getOp(dstOpName);
         assert(dstOp && "destination memory access does not exist");
         connectToMC = false;
-        interfaces[memref].connectAccessToLSQ(op);
-        interfaces[memref].connectAccessToLSQ(dstOp);
+        interfaces[memref].connectAccessToMemoryOrderingUnit(op);
+        interfaces[memref].connectAccessToMemoryOrderingUnit(dstOp);
       }
     }
     if (connectToMC)
@@ -166,7 +168,10 @@ void MarkMemoryInterfacesPass::markMemoryInterfaces(func::FuncOp funcOp) {
   for (auto &[_, regionInterfaces] : interfaces) {
     for (Operation *mcMemOp : regionInterfaces.connectToMC)
       setDialectAttr<MemInterfaceAttr>(mcMemOp, ctx);
-    for (auto &[lsqMemOp, groupID] : regionInterfaces.connectToLSQ)
-      setDialectAttr<MemInterfaceAttr>(lsqMemOp, ctx, groupID, MemOrderingKind::LSQ);
+    for (auto &[lsqMemOp, groupID] : regionInterfaces.connectToMemoryOrderingUnit) {
+      MemOrderingKind memOrderingKind = useOrderingNetwork ? MemOrderingKind::OrderingNetwork
+                                                  : MemOrderingKind::LSQ;
+      setDialectAttr<MemInterfaceAttr>(lsqMemOp, ctx, groupID, memOrderingKind);
+    }
   }
 }

@@ -445,6 +445,10 @@ def MarkMemoryInterfaces : DynamaticPass<"mark-memory-interfaces"> {
     access depends on any other. If no such attributes are present it is assumed
     that there are no memory dependencies.  
   }];
+let options = [
+    Option<"useOrderingNetwork", "use-ordering-network", "bool", "false",
+      "Whether to use ordering networks instead of LSQs when marking memory interfaces after Handshake">,
+  ];
 }
 
 def NameAllOperations : Pass<"name-all-operations", "mlir::ModuleOp"> {
