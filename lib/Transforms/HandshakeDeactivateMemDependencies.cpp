@@ -1,10 +1,17 @@
-//===- HandshakeInactivateDeps.cpp - Inactivate memory deps -----*- C++ -*-===//
+//===- HandshakeDeactivateMemDependencies.cpp - Deactivate mem deps
+//-*-C++-*-===//
 //
 // Dynamatic is under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// Implements the --handshake-deactivate-mem-dependencies pass, using the logic
+// in https://ieeexplore.ieee.org/document/8977873.
+//
+//===----------------------------------------------------------------------===//
+
 #include "dynamatic/Analysis/NameAnalysis.h"
 #include "dynamatic/Dialect/Handshake/HandshakeAttributes.h"
 #include "dynamatic/Dialect/Handshake/HandshakeOps.h"
@@ -14,7 +21,7 @@
 #include "mlir/IR/Visitors.h"
 #include "llvm/ADT/STLExtras.h"
 
-#define DEBUG_TYPE "handshake-inactivate-deps"
+#define DEBUG_TYPE "handshake-deactivate-mem-dependencies"
 
 using namespace mlir;
 using namespace dynamatic;
@@ -25,18 +32,19 @@ using DependencyMap = DenseMap<Operation *, SmallVector<MemDependenceAttr>>;
 // [START Boilerplate code for the MLIR pass]
 #include "dynamatic/Transforms/Passes.h" // IWYU pragma: keep
 namespace dynamatic {
-#define GEN_PASS_DEF_HANDSHAKEINACTIVATEDEPS
+#define GEN_PASS_DEF_HANDSHAKEDEACTIVATEMEMDEPENDENCIES
 #include "dynamatic/Transforms/Passes.h.inc"
 } // namespace dynamatic
 // [END Boilerplate code for the MLIR pass]
 
 namespace {
 
-struct HandshakeInactivateDepsPass
-    : public dynamatic::impl::HandshakeInactivateDepsBase<
-          HandshakeInactivateDepsPass> {
+struct HandshakeDeactivateMemDependenciesPass
+    : public dynamatic::impl::HandshakeDeactivateMemDependenciesBase<
+          HandshakeDeactivateMemDependenciesPass> {
 
-  using HandshakeInactivateDepsBase::HandshakeInactivateDepsBase;
+  using HandshakeDeactivateMemDependenciesBase::
+      HandshakeDeactivateMemDependenciesBase;
 
   void runDynamaticPass() override;
 
@@ -109,7 +117,8 @@ static void changeOpDeps(DependencyMap &opDeps, MLIRContext *ctx) {
     setDialectAttr<MemDependenceArrayAttr>(op, ctx, deps);
 }
 
-void HandshakeInactivateDepsPass::analyzeFunction(handshake::FuncOp funcOp) {
+void HandshakeDeactivateMemDependenciesPass::analyzeFunction(
+    handshake::FuncOp funcOp) {
   HandshakeCFG cfg(funcOp);
   DenseSet<handshake::LoadOp> loadOps;
   DenseSet<handshake::StoreOp> storeOps;
@@ -126,4 +135,31 @@ void HandshakeInactivateDepsPass::analyzeFunction(handshake::FuncOp funcOp) {
   changeOpDeps(opDeps, &getContext());
 }
 
-void HandshakeInactivateDepsPass::runDynamaticPass() {}
+void HandshakeDeactivateMemDependenciesPass::runDynamaticPass() {
+  mlir::ModuleOp modOp = getOperation();
+
+  NameAnalysis &namer = getAnalysis<NameAnalysis>();
+  WalkResult res = modOp.walk([&](Operation *op) {
+    if (!isa<handshake::LoadOp, handshake::StoreOp>(op))
+      return WalkResult::advance();
+    if (!namer.hasName(op)) {
+      op->emitError() << "Memory access port must be named.";
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
+  });
+  if (res.wasInterrupted())
+    return signalPassFailure();
+
+  for (handshake::FuncOp funcOp : modOp.getOps<handshake::FuncOp>()) {
+    for (Operation &op : funcOp.getOps()) {
+      if (!cannotBelongToCFG(&op) && !getLogicBB(&op)) {
+        op.emitError() << "Operation should have basic block attribute.";
+        return signalPassFailure();
+      }
+    }
+  }
+
+  for (handshake::FuncOp funcOp : modOp.getOps<handshake::FuncOp>())
+    analyzeFunction(funcOp);
+}
