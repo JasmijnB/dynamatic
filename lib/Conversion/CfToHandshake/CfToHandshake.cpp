@@ -20,6 +20,7 @@
 #include "dynamatic/Analysis/NameAnalysis.h"
 #include "dynamatic/Dialect/Handshake/HandshakeAttributes.h"
 #include "dynamatic/Dialect/Handshake/HandshakeDialect.h"
+#include "dynamatic/Dialect/Handshake/HandshakeEnums.h"
 #include "dynamatic/Dialect/Handshake/HandshakeInterfaces.h"
 #include "dynamatic/Dialect/Handshake/HandshakeOps.h"
 #include "dynamatic/Dialect/Handshake/HandshakeTypes.h"
@@ -945,7 +946,8 @@ LogicalResult LowerFuncToHandshake::verifyAndCreateMemInterfaces(
     SmallPtrSet<Block *, 4> controlBlocks;
 
     MemoryInterfaceBuilder memBuilder(funcOp, memref, memAccesses.memStart,
-                                      ctrlEnd, ctrlVals);
+                                      ctrlEnd, ctrlVals,
+                                      handshake::MemOrderingKind::LSQ);
 
     // Add MC ports to the interface builder
     for (auto &[_, mcBlockOps] : memAccesses.mcPorts)

@@ -46,9 +46,10 @@ public:
   /// access groups in the interface(s).
   MemoryInterfaceBuilder(handshake::FuncOp funcOp, Value memref, Value memStart,
                          Value ctrlEnd,
-                         const DenseMap<unsigned, Value> &ctrlVals)
+                         const DenseMap<unsigned, Value> &ctrlVals,
+                         handshake::MemOrderingKind orderingKind)
       : funcOp(funcOp), memref(memref), memStart(memStart), ctrlEnd(ctrlEnd),
-        ctrlVals(ctrlVals){};
+        ctrlVals(ctrlVals), orderingKind(orderingKind){};
 
   /// Adds an access port to an MC. The operation must be a load or store
   /// access to an MC. The operation must be tagged with the basic block it
@@ -118,6 +119,9 @@ private:
   /// Mapping between basic block ID and their respective entry control signal,
   /// for connecting the interface(s)'s control ports.
   DenseMap<unsigned, Value> ctrlVals;
+
+  /// Ordering kind to use when instantiating the memory ordering unit.
+  handshake::MemOrderingKind orderingKind;
 
   /// Memory access ports for the MC.
   InterfacePorts mcPorts;
