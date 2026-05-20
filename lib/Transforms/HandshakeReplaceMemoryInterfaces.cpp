@@ -334,11 +334,7 @@ void HandshakeReplaceMemoryInterfacesPass::updateMemoryAccessMarks(
       markOpsWithActiveDependencies(lsqAccessOps);
 
   for (Operation *accessOp : lsqAccessOps) {
-    if (isLSQPort.lookup(accessOp))
-      // mark the access op as an LSQ port by setting the attribute with the
-      // group ID
-      setDialectAttr<MemInterfaceAttr>(accessOp, ctx, groupMap.at(accessOp));
-    else
+    if (!isLSQPort.lookup(accessOp))
       // mark the access op as a non-LSQ port by setting the attribute without a
       // group ID
       setDialectAttr<MemInterfaceAttr>(accessOp, ctx);
