@@ -1013,15 +1013,17 @@ def MemOrderingUnitOp : Handshake_Op<"lsq", [
     3. Control signal indicating completion.
   }];
 
-  let arguments = (ins Variadic<AnyType>:$inputs, I32ArrayAttr:$groupSizes);
+  let arguments = (ins Variadic<AnyType>:$inputs, I32ArrayAttr:$groupSizes,
+                       MemOrderingKindEnumAttr:$orderingKind);
   let results = (outs Variadic<HandshakeType>:$outputs);
 
   let builders = [
     OpBuilder<(ins "Value":$memref, "Value":$memStart, "ValueRange":$inputs,
-                   "Value":$ctrlEnd, "ArrayRef<unsigned>":$groupSizes, "unsigned":$numLoads)>,
+                   "Value":$ctrlEnd, "ArrayRef<unsigned>":$groupSizes, "unsigned":$numLoads, 
+                   "::dynamatic::handshake::MemOrderingKind":$orderingKind)>,
     OpBuilder<(ins "::dynamatic::handshake::MemoryControllerOp":$mcOp,
                    "ValueRange":$inputs, "ArrayRef<unsigned>":$groupSizes,
-                   "unsigned":$numLoads)>,
+                   "unsigned":$numLoads, "::dynamatic::handshake::MemOrderingKind":$orderingKind)>,
   ];
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;

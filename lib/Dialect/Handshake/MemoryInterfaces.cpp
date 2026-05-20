@@ -105,7 +105,7 @@ LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
     // We only need an LSQ
     lsqOp = builder.create<handshake::MemOrderingUnitOp>(
         loc, memref, memStart, inputs.lsqInputs, ctrlEnd, inputs.lsqGroupSizes,
-        lsqNumLoads);
+        lsqNumLoads, handshake::MemOrderingKind::LSQ);
   } else {
     // We need a MC and an LSQ. They need to be connected with 4 new channels
     // so that the LSQ can forward its loads and stores to the MC. We need
@@ -136,7 +136,8 @@ LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
     // outputs that will go to the MC
     inputs.lsqInputs.push_back(mcOp.getOutputs().back());
     lsqOp = builder.create<handshake::MemOrderingUnitOp>(
-        loc, mcOp, inputs.lsqInputs, inputs.lsqGroupSizes, lsqNumLoads);
+        loc, mcOp, inputs.lsqInputs, inputs.lsqGroupSizes, lsqNumLoads,
+        handshake::MemOrderingKind::LSQ);
 
     // Resolve the backedges to fully connect the MC and LSQ
     ValueRange lsqMemResults = lsqOp.getOutputs().take_back(3);

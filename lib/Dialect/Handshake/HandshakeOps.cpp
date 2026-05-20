@@ -1027,7 +1027,8 @@ static void buildLSQGroupSizes(OpBuilder &odsBuilder, OperationState &odsState,
 void MemOrderingUnitOp::build(OpBuilder &odsBuilder, OperationState &odsState,
                               Value memref, Value memStart, ValueRange inputs,
                               Value ctrlEnd, ArrayRef<unsigned> groupSizes,
-                              unsigned numLoads) {
+                              unsigned numLoads,
+                              handshake::MemOrderingKind memOrderingKind) {
   // Memory operands
   odsState.addOperands({memref, memStart});
   odsState.addOperands(inputs);
@@ -1039,12 +1040,16 @@ void MemOrderingUnitOp::build(OpBuilder &odsBuilder, OperationState &odsState,
   odsState.types.append(numLoads, wrapChannel(memrefType.getElementType()));
   odsState.types.push_back(handshake::ControlType::get(ctx));
   buildLSQGroupSizes(odsBuilder, odsState, groupSizes);
+  odsState.addAttribute(
+      MemOrderingUnitOp::getOrderingKindAttrName(odsState.name),
+      handshake::MemOrderingKindAttr::get(ctx, memOrderingKind));
 }
 
 void MemOrderingUnitOp::build(OpBuilder &odsBuilder, OperationState &odsState,
                               handshake::MemoryControllerOp mcOp,
                               ValueRange inputs, ArrayRef<unsigned> groupSizes,
-                              unsigned numLoads) {
+                              unsigned numLoads,
+                              handshake::MemOrderingKind memOrderingKind) {
   // Memory operands
   odsState.addOperands(inputs);
 
@@ -1063,6 +1068,9 @@ void MemOrderingUnitOp::build(OpBuilder &odsBuilder, OperationState &odsState,
   // doesn't produce a completion signal
 
   buildLSQGroupSizes(odsBuilder, odsState, groupSizes);
+  odsState.addAttribute(
+      MemOrderingUnitOp::getOrderingKindAttrName(odsState.name),
+      handshake::MemOrderingKindAttr::get(ctx, memOrderingKind));
 }
 
 ParseResult MemOrderingUnitOp::parse(OpAsmParser &parser,
@@ -1275,6 +1283,9 @@ static LogicalResult getLSQPorts(LSQPorts &lsqPorts) {
 }
 
 LogicalResult MemOrderingUnitOp::verify() {
+  if (getOrderingKind() == handshake::MemOrderingKind::Mem)
+    return emitError() << "Memory ordering unit cannot be of kind 'mem'";
+
   // Group sizes must be strictly greater than 0
   SmallVector<unsigned> sizes = getLSQGroupSizes();
   if (sizes.empty())
