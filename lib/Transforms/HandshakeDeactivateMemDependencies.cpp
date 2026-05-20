@@ -21,8 +21,6 @@
 #include "mlir/IR/Visitors.h"
 #include "llvm/ADT/STLExtras.h"
 
-#define DEBUG_TYPE "handshake-deactivate-mem-dependencies"
-
 using namespace mlir;
 using namespace dynamatic;
 using namespace dynamatic::handshake;
