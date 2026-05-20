@@ -424,9 +424,9 @@ unsigned CFDFCGraph::getWorstCaseII() {
     mlir::Operation *lsqOp = nullptr;
 
     if (node.second.op) {
-      // Find the associated LSQOp for the current node operation
+      // Find the associated MemOrderingUnitOp for the current node operation
       for (mlir::Operation *destOp : node.second.op->getUsers()) {
-        if (isa<handshake::LSQOp>(destOp)) {
+        if (isa<handshake::MemOrderingUnitOp>(destOp)) {
           lsqOp = destOp;
           break;
         }
@@ -440,7 +440,7 @@ unsigned CFDFCGraph::getWorstCaseII() {
       // Check if the node operation is a load or store and compute latencies
       if (isa<handshake::LoadOp>(node.second.op)) {
         // Iterate through nodes again to find corresponding stores for this
-        // LSQOp
+        // MemOrderingUnitOp
         for (auto &otherNode : nodes) {
           if (otherNode.second.op &&
               isa<handshake::StoreOp>(otherNode.second.op) &&
@@ -553,12 +553,12 @@ int CFDFCGraph::getEarliestStartTime(mlir::Operation *op) {
 bool CFDFCGraph::isConnectedToLSQ(mlir::Operation *op) {
   if (auto loadOp = dyn_cast<handshake::LoadOp>(op)) {
     auto memOp = findMemInterface(loadOp.getAddressResult());
-    if (isa_and_present<handshake::LSQOp>(memOp))
+    if (isa_and_present<handshake::MemOrderingUnitOp>(memOp))
       return true;
   }
   if (auto storeOp = dyn_cast<handshake::StoreOp>(op)) {
     auto memOp = findMemInterface(storeOp.getAddressResult());
-    if (isa_and_present<handshake::LSQOp>(memOp))
+    if (isa_and_present<handshake::MemOrderingUnitOp>(memOp))
       return true;
   }
   return false;

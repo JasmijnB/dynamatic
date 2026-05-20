@@ -162,9 +162,10 @@ static std::string getPrettyNodeLabel(Operation *op) {
       .Case<handshake::MemoryControllerOp>([&](MemoryControllerOp mcOp) {
         return getMemLabel("MC", getMemName(mcOp.getMemRef()));
       })
-      .Case<handshake::LSQOp>([&](handshake::LSQOp lsqOp) {
-        return getMemLabel("LSQ", getMemName(lsqOp.getMemRef()));
-      })
+      .Case<handshake::MemOrderingUnitOp>(
+          [&](handshake::MemOrderingUnitOp lsqOp) {
+            return getMemLabel("LSQ", getMemName(lsqOp.getMemRef()));
+          })
       .Case<handshake::LoadOp>([&](handshake::LoadOp loadOp) {
         auto memOp = findMemInterface(loadOp.getAddressResult());
         StringRef memName = memOp ? getMemName(memOp.getMemRef()) : "";
@@ -527,9 +528,9 @@ static LogicalResult getMemDepDOTGraph(handshake::FuncOp funcOp,
                << "memory dependency references unknown op '" << dstName << "'";
 
       DOTGraph::Edge &edge = builder.addEdge(srcName, dstName, root);
-      edge.addAttr("label", getDepType(&op, dstOp) + " d=" +
-                                 std::to_string(dep.getDistance()) + " l=" +
-                                 std::to_string(dep.getLoopDepth()));
+      edge.addAttr("label", getDepType(&op, dstOp) +
+                                " d=" + std::to_string(dep.getDistance()) +
+                                " l=" + std::to_string(dep.getLoopDepth()));
     }
   }
 

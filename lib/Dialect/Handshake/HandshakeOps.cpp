@@ -877,7 +877,7 @@ static LogicalResult getMCPorts(MCPorts &mcPorts) {
       return success();
     };
 
-    auto handleLSQ = [&](handshake::LSQOp lsqOp) -> LogicalResult {
+    auto handleLSQ = [&](handshake::MemOrderingUnitOp lsqOp) -> LogicalResult {
       auto stAddrInput = *(++currentIt);
       auto stDataInput = *(++currentIt);
       if (failed(checkAndSetBitwidth(input.value(), mcPorts.addrWidth)) ||
@@ -912,7 +912,7 @@ static LogicalResult getMCPorts(MCPorts &mcPorts) {
       res = llvm::TypeSwitch<Operation *, LogicalResult>(portOp)
                 .Case<handshake::LoadOp>(handleLoad)
                 .Case<handshake::StoreOp>(handleStore)
-                .Case<handshake::LSQOp>(handleLSQ)
+                .Case<handshake::MemOrderingUnitOp>(handleLSQ)
                 .Default(handleControl);
     }
 
@@ -1011,7 +1011,7 @@ MemoryControllerOp::getLoadPortSlotNamer(size_t index) {
 }
 
 //===----------------------------------------------------------------------===//
-// LSQOp
+// MemOrderingUnitOp
 //===----------------------------------------------------------------------===//
 
 static void buildLSQGroupSizes(OpBuilder &odsBuilder, OperationState &odsState,
@@ -1019,13 +1019,15 @@ static void buildLSQGroupSizes(OpBuilder &odsBuilder, OperationState &odsState,
   SmallVector<int> sizesAttribute;
   for (unsigned size : groupSizes)
     sizesAttribute.push_back(size);
-  odsState.addAttribute(LSQOp::getGroupSizesAttrName(odsState.name).strref(),
-                        odsBuilder.getI32ArrayAttr(sizesAttribute));
+  odsState.addAttribute(
+      MemOrderingUnitOp::getGroupSizesAttrName(odsState.name).strref(),
+      odsBuilder.getI32ArrayAttr(sizesAttribute));
 }
 
-void LSQOp::build(OpBuilder &odsBuilder, OperationState &odsState, Value memref,
-                  Value memStart, ValueRange inputs, Value ctrlEnd,
-                  ArrayRef<unsigned> groupSizes, unsigned numLoads) {
+void MemOrderingUnitOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                              Value memref, Value memStart, ValueRange inputs,
+                              Value ctrlEnd, ArrayRef<unsigned> groupSizes,
+                              unsigned numLoads) {
   // Memory operands
   odsState.addOperands({memref, memStart});
   odsState.addOperands(inputs);
@@ -1039,9 +1041,10 @@ void LSQOp::build(OpBuilder &odsBuilder, OperationState &odsState, Value memref,
   buildLSQGroupSizes(odsBuilder, odsState, groupSizes);
 }
 
-void LSQOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                  handshake::MemoryControllerOp mcOp, ValueRange inputs,
-                  ArrayRef<unsigned> groupSizes, unsigned numLoads) {
+void MemOrderingUnitOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                              handshake::MemoryControllerOp mcOp,
+                              ValueRange inputs, ArrayRef<unsigned> groupSizes,
+                              unsigned numLoads) {
   // Memory operands
   odsState.addOperands(inputs);
 
@@ -1062,7 +1065,8 @@ void LSQOp::build(OpBuilder &odsBuilder, OperationState &odsState,
   buildLSQGroupSizes(odsBuilder, odsState, groupSizes);
 }
 
-ParseResult LSQOp::parse(OpAsmParser &parser, OperationState &result) {
+ParseResult MemOrderingUnitOp::parse(OpAsmParser &parser,
+                                     OperationState &result) {
   SmallVector<OpAsmParser::UnresolvedOperand> operands;
   SmallVector<Type> resultTypes, operandTypes;
   llvm::SMLoc allOperandLoc = parser.getCurrentLocation();
@@ -1107,7 +1111,7 @@ ParseResult LSQOp::parse(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-void LSQOp::print(OpAsmPrinter &p) {
+void MemOrderingUnitOp::print(OpAsmPrinter &p) {
   // Print reference to memory region
   bool connectsToMC = isConnectedToMC();
   if (connectsToMC) {
@@ -1270,7 +1274,7 @@ static LogicalResult getLSQPorts(LSQPorts &lsqPorts) {
   return success();
 }
 
-LogicalResult LSQOp::verify() {
+LogicalResult MemOrderingUnitOp::verify() {
   // Group sizes must be strictly greater than 0
   SmallVector<unsigned> sizes = getLSQGroupSizes();
   if (sizes.empty())
@@ -1294,14 +1298,14 @@ LogicalResult LSQOp::verify() {
   return success();
 }
 
-dynamatic::LSQPorts LSQOp::getPorts() {
+dynamatic::LSQPorts MemOrderingUnitOp::getPorts() {
   LSQPorts lsqPorts(*this);
   if (failed(getLSQPorts(lsqPorts)))
     assert(false && "failed to identify memory ports");
   return lsqPorts;
 }
 
-handshake::MemoryControllerOp LSQOp::getConnectedMC() {
+handshake::MemoryControllerOp MemOrderingUnitOp::getConnectedMC() {
   auto storeDataUsers = getResults().back().getUsers();
   if (storeDataUsers.empty())
     return nullptr;
@@ -1309,7 +1313,7 @@ handshake::MemoryControllerOp LSQOp::getConnectedMC() {
       *storeDataUsers.begin());
 }
 
-SmallVector<Value> LSQOp::getControlPaths(Operation *ctrlOp) {
+SmallVector<Value> MemOrderingUnitOp::getControlPaths(Operation *ctrlOp) {
   // Compute the set of group allocation signals to the LSQ
   DenseSet<Value> lsqGroupAllocs;
   LSQPorts ports = getPorts();
@@ -1381,23 +1385,20 @@ SmallVector<Value> LSQOp::getControlPaths(Operation *ctrlOp) {
 //===----------------------------------------------------------------------===//
 
 // TODO: Implement
-void OrderingNetworkOp::build(OpBuilder &odsBuilder,
-                                 OperationState &odsState, Value memref,
-                                 Value memStart, ValueRange inputs,
-                                 Value ctrlEnd, ArrayRef<unsigned> groupSizes,
-                                 unsigned numLoads) {}
+void OrderingNetworkOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                              Value memref, Value memStart, ValueRange inputs,
+                              Value ctrlEnd, ArrayRef<unsigned> groupSizes,
+                              unsigned numLoads) {}
 
 // TODO: Implement
-void OrderingNetworkOp::build(OpBuilder &odsBuilder,
-                                 OperationState &odsState,
-                                 handshake::MemoryControllerOp mcOp,
-                                 ValueRange inputs,
-                                 ArrayRef<unsigned> groupSizes,
-                                 unsigned numLoads) {}
+void OrderingNetworkOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                              handshake::MemoryControllerOp mcOp,
+                              ValueRange inputs, ArrayRef<unsigned> groupSizes,
+                              unsigned numLoads) {}
 
 // TODO: Implement
 ParseResult OrderingNetworkOp::parse(OpAsmParser &parser,
-                                        OperationState &result) {
+                                     OperationState &result) {
   return success();
 }
 
@@ -1419,7 +1420,7 @@ dynamatic::getMemoryPorts(handshake::MemoryOpInterface memOp) {
       assert(false && "failed to identify memory ports");
     return mcPorts;
   }
-  if (auto lsqOp = dyn_cast<handshake::LSQOp>((Operation *)memOp)) {
+  if (auto lsqOp = dyn_cast<handshake::MemOrderingUnitOp>((Operation *)memOp)) {
     LSQPorts lsqPorts(lsqOp);
     if (failed(getLSQPorts(lsqPorts)))
       assert(false && "failed to identify memory ports");
@@ -1467,15 +1468,15 @@ handshake::StoreOp StorePort::getStoreOp() const {
   return cast<handshake::StoreOp>(portOp);
 }
 
-LSQLoadStorePort::LSQLoadStorePort(dynamatic::handshake::LSQOp lsqOp,
-                                   unsigned loadAddrInputIdx,
-                                   unsigned loadDataOutputIdx)
+LSQLoadStorePort::LSQLoadStorePort(
+    dynamatic::handshake::MemOrderingUnitOp lsqOp, unsigned loadAddrInputIdx,
+    unsigned loadDataOutputIdx)
     : MemoryPort(lsqOp,
                  {loadAddrInputIdx, loadAddrInputIdx + 1, loadAddrInputIdx + 2},
                  {loadDataOutputIdx}, Kind::LSQ_LOAD_STORE) {}
 
-handshake::LSQOp LSQLoadStorePort::getLSQOp() const {
-  return cast<handshake::LSQOp>(portOp);
+handshake::MemOrderingUnitOp LSQLoadStorePort::getLSQOp() const {
+  return cast<handshake::MemOrderingUnitOp>(portOp);
 }
 
 MCLoadStorePort::MCLoadStorePort(dynamatic::handshake::MemoryControllerOp mcOp,
@@ -1649,10 +1650,11 @@ SmallVector<LSQGroup> LSQPorts::getGroups() {
   return lsqGroups;
 }
 
-LSQPorts::LSQPorts(handshake::LSQOp lsqOp) : FuncMemoryPorts(lsqOp) {}
+LSQPorts::LSQPorts(handshake::MemOrderingUnitOp lsqOp)
+    : FuncMemoryPorts(lsqOp) {}
 
-handshake::LSQOp LSQPorts::getLSQOp() const {
-  return cast<handshake::LSQOp>(memOp);
+handshake::MemOrderingUnitOp LSQPorts::getLSQOp() const {
+  return cast<handshake::MemOrderingUnitOp>(memOp);
 }
 
 MCLoadStorePort LSQPorts::getMCPort() const {

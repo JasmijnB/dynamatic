@@ -162,8 +162,10 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::replaceForMemRef(
   // Identify all memory interfaces (master and potential slaves) for the region
   auto masterIface = cast<MemoryOpInterface>(*memrefUsers.begin());
   handshake::MemoryControllerOp mcOp = nullptr;
-  handshake::LSQOp lsqOp;
-  if (lsqOp = dyn_cast<handshake::LSQOp>(masterIface.getOperation()); !lsqOp) {
+  handshake::MemOrderingUnitOp lsqOp;
+  if (lsqOp =
+          dyn_cast<handshake::MemOrderingUnitOp>(masterIface.getOperation());
+      !lsqOp) {
     // The master memory interface must be an MC
     mcOp = cast<handshake::MemoryControllerOp>(masterIface.getOperation());
 
@@ -219,7 +221,7 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::replaceForMemRef(
   MLIRContext *ctx = &getContext();
   OpBuilder builder(ctx);
   handshake::MemoryControllerOp newMCOp;
-  handshake::LSQOp newLSQOp;
+  handshake::MemOrderingUnitOp newLSQOp;
   if (failed(memBuilder.instantiateInterfaces(builder, newMCOp, newLSQOp)))
     return failure();
   assert(newMCOp || newLSQOp && "no new interface instantiated");
@@ -304,8 +306,8 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::updateMemoryAccessMarks(
 
   // Identify all memory interfaces (master and potential slaves) for the region
   Operation *memOp = *memrefUsers.begin();
-  handshake::LSQOp lsqOp;
-  if (lsqOp = dyn_cast<handshake::LSQOp>(memOp); !lsqOp) {
+  handshake::MemOrderingUnitOp lsqOp;
+  if (lsqOp = dyn_cast<handshake::MemOrderingUnitOp>(memOp); !lsqOp) {
     // The master memory interface must be an MC
     auto mcOp = dyn_cast<handshake::MemoryControllerOp>(memOp);
     if (!mcOp)

@@ -40,7 +40,7 @@ struct TimingInfo;
 class LoadOp;
 class StoreOp;
 class MemoryControllerOp;
-class LSQOp;
+class MemOrderingUnitOp;
 class MemoryUnitOp;
 
 } // end namespace handshake
@@ -77,7 +77,7 @@ public:
     STORE,
     /// MC load/store port (from dynamatic::handshake::MemoryControllerOp).
     MC_LOAD_STORE,
-    /// LSQ load/store port (from dynamatic::handshake::LSQOp),
+    /// LSQ load/store port (from dynamatic::handshake::MemOrderingUnitOp),
     LSQ_LOAD_STORE,
   };
 
@@ -130,7 +130,7 @@ public:
   ControlPort(mlir::Operation *ctrlOp, unsigned ctrlInputIdx);
 
   /// Copy-constructor from abstract memory port for LLVM-style RTTI.
-  ControlPort(const MemoryPort &memPort) : MemoryPort(memPort) {};
+  ControlPort(const MemoryPort &memPort) : MemoryPort(memPort){};
 
   /// Returns the control operation the port is associated to.
   mlir::Operation *getCtrlOp() const { return portOp; }
@@ -163,7 +163,7 @@ public:
   LoadPort(const LoadPort &other) = default;
 
   /// Copy-constructor from abstract memory port for LLVM-style RTTI.
-  LoadPort(const MemoryPort &memPort) : MemoryPort(memPort) {};
+  LoadPort(const MemoryPort &memPort) : MemoryPort(memPort){};
 
   /// Returns the load operation the port is associated to.
   dynamatic::handshake::LoadOp getLoadOp() const;
@@ -199,7 +199,7 @@ public:
   StorePort(const StorePort &other) = default;
 
   /// Copy-constructor from abstract memory port for LLVM-style RTTI.
-  StorePort(const MemoryPort &memPort) : MemoryPort(memPort) {};
+  StorePort(const MemoryPort &memPort) : MemoryPort(memPort){};
 
   /// Returns the store operation the port is associated to.
   dynamatic::handshake::StoreOp getStoreOp() const;
@@ -218,11 +218,12 @@ public:
   }
 };
 
-/// Memory load/store port associated with a `dynamatic::handshake::LSQOp`,
-/// which acts as a "middle-person" between individual load/store IR operations
-/// and another memory interface (the one which this port is attached to). As
-/// both a load port and a store port, it references 4 values through their
-/// indices in the memory interface's inputs (3) and outputs (1).
+/// Memory load/store port associated with a
+/// `dynamatic::handshake::MemOrderingUnitOp`, which acts as a "middle-person"
+/// between individual load/store IR operations and another memory interface
+/// (the one which this port is attached to). As both a load port and a store
+/// port, it references 4 values through their indices in the memory interface's
+/// inputs (3) and outputs (1).
 /// 1. The load address value produced by the LSQ and consumed by the memory
 /// interface (input).
 /// 2. The load data value produced by the memory interface and consumed by the
@@ -237,17 +238,17 @@ public:
   /// LSQ's load address output in the memory interface's inputs (the store
   /// address and store data inputs are assumed to follow), and the index of the
   /// LSQ's load data input in the memory interface's results.
-  LSQLoadStorePort(dynamatic::handshake::LSQOp lsqOp, unsigned loadAddrInputIdx,
-                   unsigned loadDataOutputIdx);
+  LSQLoadStorePort(dynamatic::handshake::MemOrderingUnitOp lsqOp,
+                   unsigned loadAddrInputIdx, unsigned loadDataOutputIdx);
 
   /// Default copy constructor.
   LSQLoadStorePort(const LSQLoadStorePort &other) = default;
 
   /// Copy-constructor from abstract memory port for LLVM-style RTTI.
-  LSQLoadStorePort(const MemoryPort &memPort) : MemoryPort(memPort) {};
+  LSQLoadStorePort(const MemoryPort &memPort) : MemoryPort(memPort){};
 
   /// Returns the LSQ the port is associated to.
-  dynamatic::handshake::LSQOp getLSQOp() const;
+  dynamatic::handshake::MemOrderingUnitOp getLSQOp() const;
 
   /// Returns the index of the load address value in the memory interface's
   /// inputs.
@@ -298,7 +299,7 @@ public:
   MCLoadStorePort(const MCLoadStorePort &other) = default;
 
   /// Copy-constructor from abstract memory port for LLVM-style RTTI.
-  MCLoadStorePort(const MemoryPort &memPort) : MemoryPort(memPort) {};
+  MCLoadStorePort(const MemoryPort &memPort) : MemoryPort(memPort){};
 
   /// Returns the MC the port is associated to.
   dynamatic::handshake::MemoryControllerOp getMCOp() const;
@@ -521,7 +522,7 @@ public:
 };
 
 /// Smart-pointer around a `dynamatic::GroupMemoryPorts`, specializing it for
-/// the `dynamatic::handshake::LSQOp` memory interface.
+/// the `dynamatic::handshake::MemOrderingUnitOp` memory interface.
 class LSQGroup {
 public:
   /// ID of the group the MC group corresponds to.
@@ -541,15 +542,16 @@ private:
   GroupMemoryPorts *group;
 };
 
-/// Specialization of memory ports for an LSQ (`dynamatic::handshake::LSQOp`),
-/// which may connect to a memory controller.
+/// Specialization of memory ports for an LSQ
+/// (`dynamatic::handshake::MemOrderingUnitOp`), which may connect to a memory
+/// controller.
 class LSQPorts : public FuncMemoryPorts {
 public:
   /// Initializes the ports for an LSQ (without any port).
-  LSQPorts(dynamatic::handshake::LSQOp lsqOp);
+  LSQPorts(dynamatic::handshake::MemOrderingUnitOp lsqOp);
 
   /// Returns the memory controller operation this refers to.
-  dynamatic::handshake::LSQOp getLSQOp() const;
+  dynamatic::handshake::MemOrderingUnitOp getLSQOp() const;
 
   /// Returns the ports corresponding to a single LSQ groups.
   LSQGroup getGroup(unsigned groupIdx) {

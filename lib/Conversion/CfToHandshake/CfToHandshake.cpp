@@ -986,7 +986,7 @@ LogicalResult LowerFuncToHandshake::verifyAndCreateMemInterfaces(
 
     // Build the memory interfaces
     handshake::MemoryControllerOp mcOp;
-    handshake::LSQOp lsqOp;
+    handshake::MemOrderingUnitOp lsqOp;
     if (failed(memBuilder.instantiateInterfaces(rewriter, mcOp, lsqOp)))
       return failure();
   }

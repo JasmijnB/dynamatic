@@ -59,7 +59,7 @@ void MemoryInterfaceBuilder::addLSQPort(unsigned group,
 
 LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
     OpBuilder &builder, handshake::MemoryControllerOp &mcOp,
-    handshake::LSQOp &lsqOp) {
+    handshake::MemOrderingUnitOp &lsqOp) {
   BackedgeBuilder edgeBuilder(builder, memref.getLoc());
 
   FConnectLoad connect = [&](LoadOp loadOp, Value dataIn) {
@@ -70,7 +70,7 @@ LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
 
 LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
     PatternRewriter &rewriter, handshake::MemoryControllerOp &mcOp,
-    handshake::LSQOp &lsqOp) {
+    handshake::MemOrderingUnitOp &lsqOp) {
   BackedgeBuilder edgeBuilder(rewriter, memref.getLoc());
   FConnectLoad connect = [&](LoadOp loadOp, Value dataIn) {
     rewriter.updateRootInPlace(loadOp, [&] { loadOp->setOperand(1, dataIn); });
@@ -81,7 +81,7 @@ LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
 LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
     OpBuilder &builder, BackedgeBuilder &edgeBuilder,
     const FConnectLoad &connect, handshake::MemoryControllerOp &mcOp,
-    handshake::LSQOp &lsqOp) {
+    handshake::MemOrderingUnitOp &lsqOp) {
 
   // Determine interfaces' inputs
   InterfaceInputs inputs;
@@ -103,9 +103,9 @@ LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
         mcNumLoads);
   } else if (inputs.mcInputs.empty() && !inputs.lsqInputs.empty()) {
     // We only need an LSQ
-    lsqOp = builder.create<handshake::LSQOp>(loc, memref, memStart,
-                                             inputs.lsqInputs, ctrlEnd,
-                                             inputs.lsqGroupSizes, lsqNumLoads);
+    lsqOp = builder.create<handshake::MemOrderingUnitOp>(
+        loc, memref, memStart, inputs.lsqInputs, ctrlEnd, inputs.lsqGroupSizes,
+        lsqNumLoads);
   } else {
     // We need a MC and an LSQ. They need to be connected with 4 new channels
     // so that the LSQ can forward its loads and stores to the MC. We need
@@ -135,8 +135,8 @@ LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
     // passing a flag to the builder so that it generates the necessary
     // outputs that will go to the MC
     inputs.lsqInputs.push_back(mcOp.getOutputs().back());
-    lsqOp = builder.create<handshake::LSQOp>(loc, mcOp, inputs.lsqInputs,
-                                             inputs.lsqGroupSizes, lsqNumLoads);
+    lsqOp = builder.create<handshake::MemOrderingUnitOp>(
+        loc, mcOp, inputs.lsqInputs, inputs.lsqGroupSizes, lsqNumLoads);
 
     // Resolve the backedges to fully connect the MC and LSQ
     ValueRange lsqMemResults = lsqOp.getOutputs().take_back(3);
@@ -301,14 +301,15 @@ void MemoryInterfaceBuilder::reconnectLoads(InterfacePorts &ports,
 // LSQGenerationInfo
 //===----------------------------------------------------------------------===//
 
-LSQGenerationInfo::LSQGenerationInfo(handshake::LSQOp lsqOp, StringRef name)
+LSQGenerationInfo::LSQGenerationInfo(handshake::MemOrderingUnitOp lsqOp,
+                                     StringRef name)
     : lsqOp(lsqOp), name(name) {
   FuncMemoryPorts lsqPorts = getMemoryPorts(lsqOp);
   fromPorts(lsqPorts);
 }
 
 LSQGenerationInfo::LSQGenerationInfo(FuncMemoryPorts &ports, StringRef name)
-    : lsqOp(cast<handshake::LSQOp>(ports.memOp)), name(name) {
+    : lsqOp(cast<handshake::MemOrderingUnitOp>(ports.memOp)), name(name) {
   fromPorts(ports);
 }
 

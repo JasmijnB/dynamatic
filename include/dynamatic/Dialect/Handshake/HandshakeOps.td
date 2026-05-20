@@ -965,14 +965,14 @@ def MemoryControllerOp : Handshake_Op<"mem_controller", [
   }];
 }
 
-def LSQOp : Handshake_Op<"lsq", [
+def MemOrderingUnitOp : Handshake_Op<"lsq", [
   DeclareOpInterfaceMethods<MemoryOpInterface>,
   DeclareOpInterfaceMethods<NamedIOInterface, ["getOperandName"]>,
   DeclareOpInterfaceMethods<NamedIOInterface, ["getResultName"]>
 ]> {
   let summary = "load-store queue  (dynamatic)";
   let description = [{
-    Each `LSQOp` represents an interface to an externally defined unidimensional
+    Each `MemOrderingUnitOp` represents an interface to an externally defined unidimensional
     memory. In terms of circuit connectivity and semantics it is quite similar
     to the `MemoryControllerOp` operation (see the latter's documentation), with
     some important differences outlined below.
@@ -1061,7 +1061,7 @@ def LSQOp : Handshake_Op<"lsq", [
 
   let extraClassDefinition = [{
     ::mlir::FailureOr<::llvm::SmallVector<::mlir::NamedAttribute>>
-    LSQOp::getRTLParameters() {
+    MemOrderingUnitOp::getRTLParameters() {
       return ::llvm::SmallVector<::mlir::NamedAttribute>{
       };
     }

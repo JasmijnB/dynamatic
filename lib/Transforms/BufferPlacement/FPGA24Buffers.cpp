@@ -443,7 +443,8 @@ void FPGA24Buffers::addPostProcessingBuffers(BufferPlacement &placement,
     bool connectsToMemCtrl = false;
     for (Value res : forkOp.getResults()) {
       for (Operation *user : res.getUsers()) {
-        if (isa<handshake::MemoryControllerOp, handshake::LSQOp>(user)) {
+        if (isa<handshake::MemoryControllerOp, handshake::MemOrderingUnitOp>(
+                user)) {
           connectsToMemCtrl = true;
           break;
         }
@@ -466,7 +467,7 @@ void FPGA24Buffers::addPostProcessingBuffers(BufferPlacement &placement,
 
   /// Buffer memory controller end signals (di_end, idx_end).
   for (Operation &op : funcInfo.funcOp.getOps()) {
-    if (!isa<handshake::MemoryControllerOp, handshake::LSQOp>(op))
+    if (!isa<handshake::MemoryControllerOp, handshake::MemOrderingUnitOp>(op))
       continue;
 
     for (Value res : op.getResults()) {

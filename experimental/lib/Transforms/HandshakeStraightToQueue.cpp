@@ -300,10 +300,9 @@ static void minimizeGroupsConnections(handshake::FuncOp funcOp,
 
 /// For each element in the group, build a lazy fork and use its output to feed
 /// the correspondent input of the LSQ.
-static DenseMap<Block *, handshake::LazyForkOp>
-connectLSQToForkGraph(handshake::FuncOp &funcOp,
-                      DenseSet<MemoryGroup *> &groups, handshake::LSQOp lsqOp,
-                      PatternRewriter &rewriter) {
+static DenseMap<Block *, handshake::LazyForkOp> connectLSQToForkGraph(
+    handshake::FuncOp &funcOp, DenseSet<MemoryGroup *> &groups,
+    handshake::MemOrderingUnitOp lsqOp, PatternRewriter &rewriter) {
 
   DenseMap<Block *, handshake::LazyForkOp> forksGraph;
   auto startValue = (Value)funcOp.getArguments().back();
@@ -348,7 +347,7 @@ connectLSQToForkGraph(handshake::FuncOp &funcOp,
 
 /// Get all the load and store operations related to a LSQ operation
 static SmallVector<handshake::MemPortOpInterface>
-getLsqOps(handshake::FuncOp &funcOp, handshake::LSQOp lsqOp) {
+getLsqOps(handshake::FuncOp &funcOp, handshake::MemOrderingUnitOp lsqOp) {
   SmallVector<handshake::MemPortOpInterface> lsqOps;
 
   for (auto memOp : funcOp.getOps<handshake::MemPortOpInterface>()) {
@@ -482,7 +481,7 @@ static LogicalResult applyStraightToQueue(handshake::FuncOp funcOp,
   ConversionPatternRewriter rewriter(ctx);
 
   // Return if there are no LSQs in the function
-  if (funcOp.getOps<handshake::LSQOp>().empty()) {
+  if (funcOp.getOps<handshake::MemOrderingUnitOp>().empty()) {
     removeNetworkCMerges(funcOp, rewriter);
     return success();
   }
@@ -492,7 +491,8 @@ static LogicalResult applyStraightToQueue(handshake::FuncOp funcOp,
     return failure();
 
   // For each LSQ
-  for (const handshake::LSQOp lsqOp : funcOp.getOps<handshake::LSQOp>()) {
+  for (const handshake::MemOrderingUnitOp lsqOp :
+       funcOp.getOps<handshake::MemOrderingUnitOp>()) {
 
     // Collect all the operations related to that LSQ
     auto lsqOps = getLsqOps(funcOp, lsqOp);

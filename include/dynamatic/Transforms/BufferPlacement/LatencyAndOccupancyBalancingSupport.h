@@ -202,7 +202,7 @@ public:
   bool isJoinNode(NodeIdType nodeId) const override {
     if (auto storeOp = dyn_cast<handshake::StoreOp>(nodes[nodeId].op)) {
       auto memOp = findMemInterface(storeOp.getAddressResult());
-      if (!mlir::isa_and_present<handshake::LSQOp>(memOp))
+      if (!mlir::isa_and_present<handshake::MemOrderingUnitOp>(memOp))
         return true;
     }
 
@@ -342,7 +342,7 @@ public:
   bool isJoinNode(NodeIdType nodeId) const override {
     if (auto storeOp = dyn_cast<handshake::StoreOp>(nodes[nodeId].op)) {
       auto memOp = findMemInterface(storeOp.getAddressResult());
-      if (!mlir::isa_and_present<handshake::LSQOp>(memOp))
+      if (!mlir::isa_and_present<handshake::MemOrderingUnitOp>(memOp))
         return true;
     }
 

@@ -48,12 +48,12 @@ public:
   // the constructor of a non-base class.
   LowerFuncToHandshake(NameAnalysis &namer, MLIRContext *ctx,
                        mlir::PatternBenefit benefit = 1)
-      : DynOpConversionPattern<mlir::func::FuncOp>(namer, ctx, benefit) {};
+      : DynOpConversionPattern<mlir::func::FuncOp>(namer, ctx, benefit){};
 
   LowerFuncToHandshake(NameAnalysis &namer, const TypeConverter &typeConverter,
                        MLIRContext *ctx, mlir::PatternBenefit benefit = 1)
       : DynOpConversionPattern<mlir::func::FuncOp>(namer, typeConverter, ctx,
-                                                   benefit) {};
+                                                   benefit){};
 
   LogicalResult
   matchAndRewrite(mlir::func::FuncOp funcOp, OpAdaptor adaptor,
@@ -124,11 +124,11 @@ public:
   /// memory region:
   /// - A single `handshake::MemoryControllerOp` will be instantiated if all of
   /// its accesses indicate that they should connect to an MC.
-  /// - A single `handshake::LSQOp` will be instantiated if none of
+  /// - A single `handshake::MemOrderingUnitOp` will be instantiated if none of
   /// its accesses indicate that they should connect to an LSQ.
-  /// - Both a `handhsake::MemoryControllerOp` and `handhsake::LSQOp` will be
-  /// instantiated if some but not all of its accesses indicate that they should
-  /// connect to an LSQ.
+  /// - Both a `handhsake::MemoryControllerOp` and
+  /// `handhsake::MemOrderingUnitOp` will be instantiated if some but not all of
+  /// its accesses indicate that they should connect to an LSQ.
   virtual LogicalResult
   verifyAndCreateMemInterfaces(handshake::FuncOp funcOp,
                                ConversionPatternRewriter &rewriter,

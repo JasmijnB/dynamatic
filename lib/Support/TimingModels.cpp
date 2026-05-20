@@ -156,7 +156,7 @@ LogicalResult TimingDatabase::getLatency(
   // information in our models.
   if (auto loadOp = dyn_cast<handshake::LoadOp>(op)) {
     auto memOp = findMemInterface(loadOp.getAddressResult());
-    if (isa_and_present<handshake::LSQOp>(memOp))
+    if (isa_and_present<handshake::MemOrderingUnitOp>(memOp))
       latency += 3;
   }
   return success();

@@ -87,22 +87,23 @@ private:
 };
 
 bool isChannelToBeChecked(OpResult res) {
-  // The channel connected to EndOp, MemoryControllerOp, and LSQOp don't appear
-  // in the properties database for the following reasons:
+  // The channel connected to EndOp, MemoryControllerOp, and MemOrderingUnitOp
+  // don't appear in the properties database for the following reasons:
   // - EndOp: the operation doesn't exist in the output model; the property
   //   creation is still possible but requires to get the names of the model's
   //   I/O signals (not implemented yet)
-  // - MemeoryControllerOp and LSQOp: only load and stores can be connected to
+  // - MemeoryControllerOp and MemOrderingUnitOp: only load and stores can be
+  // connected to
   //   these Ops, therefore we cannot rigidify their channels with the
   //   ReadyRemoverOp and ValidMergerOp
-  if (isa<handshake::EndOp, handshake::MemoryControllerOp, handshake::LSQOp>(
-          res.getOwner()))
+  if (isa<handshake::EndOp, handshake::MemoryControllerOp,
+          handshake::MemOrderingUnitOp>(res.getOwner()))
     return false;
 
   return std::all_of(
       res.getUsers().begin(), res.getUsers().end(), [](auto *user) {
         return !isa<handshake::EndOp, handshake::MemoryControllerOp,
-                    handshake::LSQOp>(*user);
+                    handshake::MemOrderingUnitOp>(*user);
       });
 }
 } // namespace

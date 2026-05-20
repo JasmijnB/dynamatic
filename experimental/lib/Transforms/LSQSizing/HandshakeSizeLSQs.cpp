@@ -554,7 +554,7 @@ HandshakeSizeLSQsPass::calcQueueSize(
     for (auto &timeForOp : allocTimeMapForII) {
       mlir::Operation *lsqOp = nullptr;
       for (Operation *destOp : timeForOp.first->getUsers()) {
-        if (isa<handshake::LSQOp>(destOp)) {
+        if (isa<handshake::MemOrderingUnitOp>(destOp)) {
           lsqOp = destOp;
           break;
         }
@@ -581,7 +581,7 @@ HandshakeSizeLSQsPass::calcQueueSize(
     for (auto &timeForOp : deallocTimeMapForII) {
       mlir::Operation *lsqOp = nullptr;
       for (Operation *destOp : timeForOp.first->getUsers()) {
-        if (isa<handshake::LSQOp>(destOp)) {
+        if (isa<handshake::MemOrderingUnitOp>(destOp)) {
           lsqOp = destOp;
           break;
         }

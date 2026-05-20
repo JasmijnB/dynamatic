@@ -8,7 +8,7 @@
 //
 // This header declares a couple data-structures and methods to work with
 // Handshake memory interfaces (e.g., `handshake::MemoryControllerOp`,
-// `handshake::LSQOp`).
+// `handshake::MemOrderingUnitOp`).
 //
 //===----------------------------------------------------------------------===//
 
@@ -24,11 +24,11 @@
 namespace dynamatic {
 
 /// Helper class to instantiate appropriate Handshake-level memory interfaces
-/// (handshake::MemoryControllerOp and/or handshake::LSQOp) for a set of memory
-/// accesses. This abstracts away the complexity of determining the kind of
-/// memory interface(s) one needs for a set of memory accesses, the somewhat
-/// convoluted creation of SSA inputs for these interface(s), and the "circuit
-/// rewiring" required to connect accesses to interfaces.
+/// (handshake::MemoryControllerOp and/or handshake::MemOrderingUnitOp) for a
+/// set of memory accesses. This abstracts away the complexity of determining
+/// the kind of memory interface(s) one needs for a set of memory accesses, the
+/// somewhat convoluted creation of SSA inputs for these interface(s), and the
+/// "circuit rewiring" required to connect accesses to interfaces.
 ///
 /// Add memory ports (i.e., load/store-like operations) to the future memory
 /// interfaces using `MemoryInterfaceBuilder::addMCPort` and
@@ -48,7 +48,7 @@ public:
                          Value ctrlEnd,
                          const DenseMap<unsigned, Value> &ctrlVals)
       : funcOp(funcOp), memref(memref), memStart(memStart), ctrlEnd(ctrlEnd),
-        ctrlVals(ctrlVals) {};
+        ctrlVals(ctrlVals){};
 
   /// Adds an access port to an MC. The operation must be a load or store
   /// access to an MC. The operation must be tagged with the basic block it
@@ -70,14 +70,14 @@ public:
   /// method could not determine memory inputs for the interface(s).
   LogicalResult instantiateInterfaces(OpBuilder &builder,
                                       handshake::MemoryControllerOp &mcOp,
-                                      handshake::LSQOp &lsqOp);
+                                      handshake::MemOrderingUnitOp &lsqOp);
 
   /// Instantiates appropriate memory interfaces for all the ports that were
   /// added to the builder so far using a pattern rewriter. See overload's
   /// documentation for more details.
   LogicalResult instantiateInterfaces(mlir::PatternRewriter &rewriter,
                                       handshake::MemoryControllerOp &mcOp,
-                                      handshake::LSQOp &lsqOp);
+                                      handshake::MemOrderingUnitOp &lsqOp);
 
   /// Returns results of load/store-like operations which are to be given as
   /// operands to a memory interface.
@@ -157,14 +157,14 @@ private:
                                       BackedgeBuilder &edgeBuilder,
                                       const FConnectLoad &connect,
                                       handshake::MemoryControllerOp &mcOp,
-                                      handshake::LSQOp &lsqOp);
+                                      handshake::MemOrderingUnitOp &lsqOp);
 };
 
 /// Aggregates LSQ generation information to be passed to the DOT printer under
 /// DOT attribute form or to the Chisel LSQ generator under JSON form.
 struct LSQGenerationInfo {
   /// The LSQ for which generation information is being derived.
-  handshake::LSQOp lsqOp;
+  handshake::MemOrderingUnitOp lsqOp;
   /// The name to give to the RTL module representing the LSQ.
   std::string name;
   /// Signals widths, for data and address buses.
@@ -222,7 +222,7 @@ struct LSQGenerationInfo {
   SmallVector<SmallVector<unsigned>> ldPortIdx, stPortIdx;
 
   /// Derives generation information for the provided LSQ.
-  LSQGenerationInfo(handshake::LSQOp lsqOp, StringRef name = "LSQ");
+  LSQGenerationInfo(handshake::MemOrderingUnitOp lsqOp, StringRef name = "LSQ");
 
   /// Derives generation information for the provided LSQ, passed through its
   /// port information.
