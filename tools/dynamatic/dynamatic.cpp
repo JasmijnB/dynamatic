@@ -300,6 +300,8 @@ public:
   static constexpr llvm::StringLiteral RIGIDIFICATION = "rigidification";
   static constexpr llvm::StringLiteral DISABLE_LSQ = "disable-lsq";
   static constexpr llvm::StringLiteral STRAIGHT_TO_QUEUE = "straight-to-queue";
+  static constexpr llvm::StringLiteral USE_ORDERING_NETWORK =
+      "use-ordering-network";
 
   Compile(FrontendState &state)
       : Command("compile",
@@ -328,6 +330,8 @@ public:
                           "accesses, use with caution!"});
     addFlag({STRAIGHT_TO_QUEUE,
              "Use straight to queue to connect the circuit to the LSQ"});
+    addFlag({USE_ORDERING_NETWORK,
+             "Use ordering networks instead of LSQs for memory ordering"});
   }
 
   CommandResult execute(CommandArguments &args) override;
@@ -759,12 +763,15 @@ CommandResult Compile::execute(CommandArguments &args) {
   std::string sharing = args.flags.contains(SHARING) ? "1" : "0";
   std::string rigidification = args.flags.contains(RIGIDIFICATION) ? "1" : "0";
   std::string disableLSQ = args.flags.contains(DISABLE_LSQ) ? "1" : "0";
+  std::string useOrderingNetwork =
+      args.flags.contains(USE_ORDERING_NETWORK) ? "1" : "0";
 
   return execCmd(script, state.dynamaticPath, state.getKernelDir(),
                  state.getOutputDir(), state.getKernelName(), buffers,
                  floatToString(state.targetCP, 3), sharing,
                  state.fpUnitsGenerator, rigidification, disableLSQ,
-                 fastTokenDelivery, milpSolver, straightToQueue);
+                 fastTokenDelivery, milpSolver, straightToQueue,
+                 useOrderingNetwork);
 }
 
 CommandResult WriteHDL::execute(CommandArguments &args) {

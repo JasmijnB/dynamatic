@@ -20,6 +20,13 @@ DISABLE_LSQ=${10}
 FAST_TOKEN_DELIVERY=${11}
 MILP_SOLVER=${12}
 STRAIGHT_TO_QUEUE=${13}
+USE_ORDERING_NETWORK=${14}
+
+if [[ $USE_ORDERING_NETWORK -ne 0 ]]; then
+  REPLACE_MEM_IFACES="--handshake-replace-memory-interfaces=use-ordering-network=true"
+else
+  REPLACE_MEM_IFACES="--handshake-replace-memory-interfaces"
+fi
 
 LLVM=$DYNAMATIC_DIR/llvm-project
 DYNAMATIC_BINS=$DYNAMATIC_DIR/bin
@@ -267,7 +274,7 @@ if [[ $STRAIGHT_TO_QUEUE -ne 0 ]]; then
 
   # FPT19 should run before straight to the queue, so that no useless components are instantiated.
   "$DYNAMATIC_OPT_BIN" "$F_HANDSHAKE" \
-    --handshake-deactivate-mem-dependencies --handshake-replace-memory-interfaces \
+    --handshake-deactivate-mem-dependencies $REPLACE_MEM_IFACES \
     --handshake-straight-to-queue \
     --handshake-combine-steering-logic \
     > "$F_HANDSHAKE_SQ"
@@ -288,7 +295,7 @@ else
 
   # handshake transformations
   "$DYNAMATIC_OPT_BIN" "$F_HANDSHAKE" \
-    --handshake-deactivate-mem-dependencies --handshake-replace-memory-interfaces \
+    --handshake-deactivate-mem-dependencies $REPLACE_MEM_IFACES \
     --handshake-remove-unused-memrefs \
     --handshake-minimize-cst-width --handshake-optimize-bitwidths \
     --handshake-materialize --handshake-infer-basic-blocks \

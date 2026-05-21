@@ -53,6 +53,7 @@ class SpecFixture : public BaseFixture {};
 
 class RigidificationFixture : public BaseFixture {};
 class VerifyInvariantsFixture : public BaseFixture {};
+class OrderingNetworkFixture : public BaseFixture {};
 
 TEST_P(BasicFixture, basic) {
   IntegrationTestData config{
@@ -226,6 +227,24 @@ TEST_P(SpecFixture, spec) {
   logPerformance(simTime);
 }
 
+TEST_P(OrderingNetworkFixture, basic) {
+  IntegrationTestData config{
+      // clang-format off
+      .name = GetParam(),
+      .benchmarkPath = fs::path(DYNAMATIC_ROOT) / "integration-test",
+      .testVerilog = true,
+      .useSharing = false,
+      .useOrderingNetwork = true,
+      .milpSolver = "gurobi",
+      .bufferAlgorithm = "fpga20",
+      .simTime = -1
+      // clang-format on
+  };
+  EXPECT_EQ(runIntegrationTest(config), 0);
+  RecordProperty("cycles", std::to_string(config.simTime));
+  logPerformance(config.simTime);
+}
+
 // clang-format off
 INSTANTIATE_TEST_SUITE_P(
     MiscBenchmarks, BasicFixture,
@@ -300,6 +319,45 @@ INSTANTIATE_TEST_SUITE_P(
       "test_bool_array",
       "test_divui",
       "test_fneg"
+      ),
+      [](const auto &info) { return info.param; });
+
+INSTANTIATE_TEST_SUITE_P(
+    MiscBenchmarks, OrderingNetworkFixture,
+    // only cover the tests with any dependency edges
+    testing::Values(
+      "atax",
+      "atax_float",
+      "bicg",
+      "bicg_float",
+      "covariance",
+      "gaussian",
+      "gemm",
+      "gemm_float",
+      "gemver",
+      "gemver_float",
+      "get_tanh",
+      "histogram",
+      "insertion_sort",
+      "jacobi_1d_imper",
+      "kernel_2mm",
+      "kernel_2mm_float",
+      "kernel_3mm",
+      "kernel_3mm_float",
+      "kmp",
+      "loop_array",
+      "lu",
+      "matching",
+      "matching_2",
+      "matrix_power",
+      "memory",
+      "pivot",
+      "polyn_mult",
+      "symm_float",
+      "syr2k_float",
+      "threshold",
+      "triangular",
+      "while_loop_1"
       ),
       [](const auto &info) { return info.param; });
 
