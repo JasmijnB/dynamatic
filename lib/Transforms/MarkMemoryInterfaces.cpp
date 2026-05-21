@@ -168,10 +168,7 @@ void MarkMemoryInterfacesPass::markMemoryInterfaces(func::FuncOp funcOp) {
   for (auto &[_, regionInterfaces] : interfaces) {
     for (Operation *mcMemOp : regionInterfaces.connectToMC)
       setDialectAttr<MemInterfaceAttr>(mcMemOp, ctx);
-    for (auto &[lsqMemOp, groupID] : regionInterfaces.connectToMemoryOrderingUnit) {
-      MemOrderingKind memOrderingKind = useOrderingNetwork ? MemOrderingKind::OrderingNetwork
-                                                  : MemOrderingKind::LSQ;
-      setDialectAttr<MemInterfaceAttr>(lsqMemOp, ctx, groupID, memOrderingKind);
-    }
+    for (auto &[lsqMemOp, groupID] : regionInterfaces.connectToMemoryOrderingUnit)
+      setDialectAttr<MemInterfaceAttr>(lsqMemOp, ctx, groupID, MemOrderingKind::LSQ);
   }
 }

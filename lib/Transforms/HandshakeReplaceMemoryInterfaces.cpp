@@ -51,6 +51,8 @@ struct HandshakeReplaceMemoryInterfacesPass
     : public dynamatic::impl::HandshakeReplaceMemoryInterfacesBase<
           HandshakeReplaceMemoryInterfacesPass> {
 
+  using HandshakeReplaceMemoryInterfacesBase::HandshakeReplaceMemoryInterfacesBase;
+
   void runDynamaticPass() override;
 
 private:
@@ -175,10 +177,10 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::replaceForMemRef(
       lsqOp = ports.getLSQPort().getLSQOp();
   }
 
-  // Context and builder for creating new operation. Preserve the existing
-  // LSQ's ordering kind (LSQ vs. OrderingNetwork) when rebuilding.
-  handshake::MemOrderingKind orderingKind =
-      lsqOp ? lsqOp.getOrderingKind() : handshake::MemOrderingKind::LSQ;
+  // Context and builder for creating new operation
+  handshake::MemOrderingKind orderingKind = useOrderingNetwork
+                                                ? handshake::MemOrderingKind::OrderingNetwork
+                                                : handshake::MemOrderingKind::LSQ;
   MemoryInterfaceBuilder memBuilder(funcOp, memref, masterIface.getMemStart(),
                                     masterIface.getCtrlEnd(), ctrlVals,
                                     orderingKind);
@@ -347,11 +349,14 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::updateMemoryAccessMarks(
       markOpsWithActiveDependencies(lsqAccessOps);
 
   for (Operation *accessOp : lsqAccessOps) {
-    if (isLSQPort.lookup(accessOp))
-      setDialectAttr<MemInterfaceAttr>(accessOp, ctx, groupMap.at(accessOp),
-                                       handshake::MemOrderingKind::LSQ);
-    else
+    if (isLSQPort.lookup(accessOp)) {
+      handshake::MemOrderingKind kind = useOrderingNetwork
+                                            ? handshake::MemOrderingKind::OrderingNetwork
+                                            : handshake::MemOrderingKind::LSQ;
+      setDialectAttr<MemInterfaceAttr>(accessOp, ctx, groupMap.at(accessOp), kind);
+    } else {
       setDialectAttr<MemInterfaceAttr>(accessOp, ctx);
+    }
   }
   return success();
 }
