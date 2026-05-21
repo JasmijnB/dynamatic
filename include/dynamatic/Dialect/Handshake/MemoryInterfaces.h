@@ -237,6 +237,65 @@ private:
   /// passed through its port information.
   void fromPorts(FuncMemoryPorts &ports);
 };
+/// Represents a directed dependency edge between two memory access ports in an
+/// ordering network. `src` and `dst` are global port indices (in program order
+/// across all groups), and `dp` is the dependency distance from the
+/// corresponding MemDependenceAttr.
+struct OrderingNetworkEdge {
+  unsigned src, dst, dp;
+};
+
+/// Holds all information needed to generate an ordering network RTL module for
+/// a MemOrderingUnitOp. Equivalent to LSQGenerationInfo, but replaces the
+/// group-order arrays (ldOrder, loadOffsets, storeOffsets) with an explicit
+/// dependency graph over the access ports.
+struct OrderingNetworkGenerationInfo {
+  /// The ordering network op for which generation information is being derived.
+  handshake::MemOrderingUnitOp lsqOp;
+  /// The name to give to the RTL module.
+  std::string name;
+  /// Signals widths, for data and address buses.
+  unsigned dataWidth, addrWidth;
+  /// Number of groups, load ports, and store ports.
+  unsigned numGroups, numLoads, numStores;
+  /// Number of loads and stores per group.
+  SmallVector<unsigned> loadsPerGroup, storesPerGroup;
+  /// Overall indices for all load and store ports, split by group.
+  SmallVector<SmallVector<unsigned>> loadPorts, storePorts;
+  /// Maps each global port index (in program order across all groups) to its
+  /// group ID.
+  SmallVector<unsigned> vertexGroups;
+  /// Dependency edges between ports derived from active MemDependenceAttrs.
+  SmallVector<OrderingNetworkEdge> dependencyEdges;
+  /// Depth of queues within the ordering network.
+  unsigned depth = 16, depthLoad = 16, depthStore = 16, bufferDepth = 0;
+  /// Number of channels at memory interface.
+  unsigned numLdChannels = 1, numStChannels = 1;
+  /// Number of bits for ID in the memory interface.
+  unsigned indexWidth = 6;
+  /// Indicate whether the store response channel is enabled.
+  unsigned stResp = 0;
+  /// Indicate whether multiple groups are allowed to request allocation
+  /// simultaneously.
+  unsigned groupMulti = 0;
+  /// Indicate whether pipeline registers are inserted.
+  unsigned pipe0En = 0, pipe1En = 0, pipeCompEn = 0;
+  /// Indicate whether the head pointer of the load queue is updated one cycle
+  /// later than the valid bits of entries.
+  unsigned headLagEn = 0;
+
+  /// Derives generation information for the provided ordering network op.
+  OrderingNetworkGenerationInfo(handshake::MemOrderingUnitOp lsqOp,
+                                StringRef name = "ordering_network");
+
+  /// Derives generation information from pre-computed port information.
+  OrderingNetworkGenerationInfo(FuncMemoryPorts &ports,
+                                StringRef name = "ordering_network");
+
+private:
+  void fromPorts(FuncMemoryPorts &ports);
+};
+
 } // namespace dynamatic
 
 #endif // DYNAMATIC_DIALECT_HANDSHAKE_MEMORY_INTERFACES_H

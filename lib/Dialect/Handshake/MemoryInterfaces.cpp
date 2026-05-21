@@ -421,3 +421,85 @@ void LSQGenerationInfo::fromPorts(FuncMemoryPorts &ports) {
   // Update the index width
   indexWidth = llvm::Log2_64_Ceil(depthLoad);
 }
+
+//===----------------------------------------------------------------------===//
+// OrderingNetworkGenerationInfo
+//===----------------------------------------------------------------------===//
+
+OrderingNetworkGenerationInfo::OrderingNetworkGenerationInfo(
+    handshake::MemOrderingUnitOp lsqOp, StringRef name)
+    : lsqOp(lsqOp), name(name) {
+  FuncMemoryPorts ports = getMemoryPorts(lsqOp);
+  fromPorts(ports);
+}
+
+OrderingNetworkGenerationInfo::OrderingNetworkGenerationInfo(
+    FuncMemoryPorts &ports, StringRef name)
+    : lsqOp(cast<handshake::MemOrderingUnitOp>(ports.memOp)), name(name) {
+  fromPorts(ports);
+}
+
+void OrderingNetworkGenerationInfo::fromPorts(FuncMemoryPorts &ports) {
+  dataWidth = ports.dataWidth;
+  addrWidth = ports.addrWidth;
+
+  // TODO: Calculate depth better
+  depthLoad = 4;
+  depthStore = 4;
+
+  numGroups = ports.getNumGroups();
+  numLoads = ports.getNumPorts<LoadPort>();
+  numStores = ports.getNumPorts<StorePort>();
+
+  // Assign a global port index to each access port (in program order across
+  // all groups) and build the vertex→group mapping.
+  unsigned globalIdx = 0;
+  unsigned loadIdx = 0, storeIdx = 0;
+  DenseMap<StringRef, unsigned> nameToPortIdx;
+
+  for (auto [groupID, groupPorts] : llvm::enumerate(ports.groups)) {
+    unsigned numLoadsInGroup = groupPorts.getNumPorts<LoadPort>();
+    unsigned numStoresInGroup = groupPorts.getNumPorts<StorePort>();
+    loadsPerGroup.push_back(numLoadsInGroup);
+    storesPerGroup.push_back(numStoresInGroup);
+
+    SmallVector<unsigned> groupLoadPorts, groupStorePorts;
+
+    for (MemoryPort &accessPort : groupPorts.accessPorts) {
+      vertexGroups.push_back(groupID);
+      nameToPortIdx[getUniqueName(accessPort.portOp)] = globalIdx;
+
+      if (isa<LoadPort>(accessPort))
+        groupLoadPorts.push_back(loadIdx++);
+      else
+        groupStorePorts.push_back(storeIdx++);
+
+      ++globalIdx;
+    }
+
+    loadPorts.push_back(groupLoadPorts);
+    storePorts.push_back(groupStorePorts);
+  }
+
+  // Build dependency edges from active MemDependenceAttrs on each access port.
+  globalIdx = 0;
+  for (GroupMemoryPorts &groupPorts : ports.groups) {
+    for (MemoryPort &accessPort : groupPorts.accessPorts) {
+      if (auto deps =
+              getDialectAttr<MemDependenceArrayAttr>(accessPort.portOp)) {
+        for (MemDependenceAttr dep : deps.getDependencies()) {
+          if (dep.getIsActive()) {
+            auto dstIt = nameToPortIdx.find(dep.getDstAccess());
+            assert(dstIt != nameToPortIdx.end() &&
+                   "dependency destination not found among ports");
+            dependencyEdges.push_back(
+                {globalIdx, dstIt->second, dep.getDistance()});
+          }
+        }
+      }
+      ++globalIdx;
+    }
+  }
+
+  indexWidth = llvm::Log2_64_Ceil(depthLoad);
+}

@@ -812,10 +812,7 @@ ModuleDiscriminator::ModuleDiscriminator(FuncMemoryPorts &ports) {
         addType("DATA_TYPE", ChannelType::get(dataType));
         addType("ADDR_TYPE", ChannelType::get(addrType));
       })
-      .Case<handshake::MemOrderingUnitOp>([&](auto) {
-        LSQGenerationInfo genInfo(ports, getUniqueName(op).str());
-        modName = getOpName() + "_" + genInfo.name;
-
+      .Case<handshake::MemOrderingUnitOp>([&](auto memOrderingUnitOp) {
         /// Converts an array into an equivalent MLIR attribute.
         Type intType = IntegerType::get(ctx, 32);
         auto addArrayIntAttr = [&](StringRef name,
@@ -842,36 +839,74 @@ ModuleDiscriminator::ModuleDiscriminator(FuncMemoryPorts &ports) {
           addParam(name, ArrayAttr::get(ctx, biArrayAttr));
         };
 
-        addString("name", *modName);
-        addBoolean("master", ports.interfacePorts.empty());
-        addUnsigned("fifoDepth", genInfo.depth);
-        addUnsigned("fifoDepth_L", genInfo.depthLoad);
-        addUnsigned("fifoDepth_S", genInfo.depthStore);
-        addUnsigned("bufferDepth", genInfo.bufferDepth);
-        addUnsigned("dataWidth", genInfo.dataWidth);
-        addUnsigned("addrWidth", genInfo.addrWidth);
-        addUnsigned("numBBs", genInfo.numGroups);
-        addUnsigned("numLoadPorts", genInfo.numLoads);
-        addUnsigned("numStorePorts", genInfo.numStores);
-        addArrayIntAttr("numLoads", genInfo.loadsPerGroup);
-        addArrayIntAttr("numStores", genInfo.storesPerGroup);
-        addBiArrayIntAttr("loadOffsets", genInfo.loadOffsets);
-        addBiArrayIntAttr("storeOffsets", genInfo.storeOffsets);
-        addBiArrayIntAttr("loadPorts", genInfo.loadPorts);
-        addBiArrayIntAttr("storePorts", genInfo.storePorts);
-        /// Add the attributes needed by the new lsq config file
-        addBiArrayIntAttr("ldOrder", genInfo.ldOrder);
-        addBiArrayIntAttr("ldPortIdx", genInfo.ldPortIdx);
-        addBiArrayIntAttr("stPortIdx", genInfo.stPortIdx);
-        addUnsigned("indexWidth", genInfo.indexWidth);
-        addUnsigned("numLdChannels", genInfo.numLdChannels);
-        addUnsigned("numStChannels", genInfo.numStChannels);
-        addUnsigned("stResp", genInfo.stResp);
-        addUnsigned("groupMulti", genInfo.groupMulti);
-        addUnsigned("pipe0En", genInfo.pipe0En);
-        addUnsigned("pipe1En", genInfo.pipe1En);
-        addUnsigned("pipeCompEn", genInfo.pipeCompEn);
-        addUnsigned("headLagEn", genInfo.headLagEn);
+        if (memOrderingUnitOp.getOrderingKind() ==
+            handshake::MemOrderingKind::LSQ) {
+          LSQGenerationInfo genInfo(ports, getUniqueName(op).str());
+          modName = getOpName() + "_" + genInfo.name;
+
+          addString("name", *modName);
+          addBoolean("isOrderingNetwork", false);
+          addBoolean("master", ports.interfacePorts.empty());
+          addUnsigned("fifoDepth", genInfo.depth);
+          addUnsigned("fifoDepth_L", genInfo.depthLoad);
+          addUnsigned("fifoDepth_S", genInfo.depthStore);
+          addUnsigned("bufferDepth", genInfo.bufferDepth);
+          addUnsigned("dataWidth", genInfo.dataWidth);
+          addUnsigned("addrWidth", genInfo.addrWidth);
+          addUnsigned("numBBs", genInfo.numGroups);
+          addUnsigned("numLoadPorts", genInfo.numLoads);
+          addUnsigned("numStorePorts", genInfo.numStores);
+          addArrayIntAttr("numLoads", genInfo.loadsPerGroup);
+          addArrayIntAttr("numStores", genInfo.storesPerGroup);
+          addBiArrayIntAttr("loadOffsets", genInfo.loadOffsets);
+          addBiArrayIntAttr("storeOffsets", genInfo.storeOffsets);
+          addBiArrayIntAttr("loadPorts", genInfo.loadPorts);
+          addBiArrayIntAttr("storePorts", genInfo.storePorts);
+          addBiArrayIntAttr("ldOrder", genInfo.ldOrder);
+          addBiArrayIntAttr("ldPortIdx", genInfo.ldPortIdx);
+          addBiArrayIntAttr("stPortIdx", genInfo.stPortIdx);
+          addUnsigned("indexWidth", genInfo.indexWidth);
+          addUnsigned("numLdChannels", genInfo.numLdChannels);
+          addUnsigned("numStChannels", genInfo.numStChannels);
+          addUnsigned("stResp", genInfo.stResp);
+          addUnsigned("groupMulti", genInfo.groupMulti);
+          addUnsigned("pipe0En", genInfo.pipe0En);
+          addUnsigned("pipe1En", genInfo.pipe1En);
+          addUnsigned("pipeCompEn", genInfo.pipeCompEn);
+          addUnsigned("headLagEn", genInfo.headLagEn);
+        } else {
+          OrderingNetworkGenerationInfo genInfo(ports, getUniqueName(op).str());
+          modName = getOpName() + "_" + genInfo.name;
+          addString("name", *modName);
+          addBoolean("isOrderingNetwork", true);
+          addBoolean("master", ports.interfacePorts.empty());
+          addUnsigned("fifoDepth", genInfo.depth);
+          addUnsigned("fifoDepth_L", genInfo.depthLoad);
+          addUnsigned("fifoDepth_S", genInfo.depthStore);
+          addUnsigned("bufferDepth", genInfo.bufferDepth);
+          addUnsigned("dataWidth", genInfo.dataWidth);
+          addUnsigned("addrWidth", genInfo.addrWidth);
+          addUnsigned("numBBs", genInfo.numGroups);
+          addUnsigned("numLoadPorts", genInfo.numLoads);
+          addUnsigned("numStorePorts", genInfo.numStores);
+          addArrayIntAttr("numLoads", genInfo.loadsPerGroup);
+          addArrayIntAttr("numStores", genInfo.storesPerGroup);
+          addArrayIntAttr("vertexGroups", genInfo.vertexGroups);
+          addBiArrayIntAttr("loadPorts", genInfo.loadPorts);
+          addBiArrayIntAttr("storePorts", genInfo.storePorts);
+          // Dependency edges as three parallel arrays
+          SmallVector<unsigned> edgeSrc, edgeDst, edgeDp;
+          for (const OrderingNetworkEdge &edge : genInfo.dependencyEdges) {
+            edgeSrc.push_back(edge.src);
+            edgeDst.push_back(edge.dst);
+            edgeDp.push_back(edge.dp);
+          }
+          addArrayIntAttr("edgeSrc", edgeSrc);
+          addArrayIntAttr("edgeDst", edgeDst);
+          addArrayIntAttr("edgeDp", edgeDp);
+          addUnsigned("indexWidth", genInfo.indexWidth);
+          addUnsigned("stResp", genInfo.stResp);
+        }
       })
       .Default([&](auto) {
         op->emitError() << "Unsupported memory interface type.";

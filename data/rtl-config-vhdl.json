@@ -55,6 +55,31 @@
   },
   {
     "name": "handshake.lsq",
+    "parameters": [
+      {
+        "name": "isOrderingNetwork",
+        "type": "boolean",
+        "eq": true
+      }
+    ],
+    "generator": "/usr/bin/env python3 $DYNAMATIC/tools/backend/lsq-python/ordering-network-generator.py -o $OUTPUT_DIR -c $OUTPUT_DIR/$MODULE_NAME.json --hdl vhdl",
+    "use-json-config": "$OUTPUT_DIR/$MODULE_NAME.json",
+    "hdl": "vhdl",
+    "io-kind": "flat",
+    "io-map": [{ "clk": "clk" }, { "rst": "rst" }, { "*": "io_*" }],
+    "io-signals": {
+      "data": "_bits"
+    }
+  },
+  {
+    "name": "handshake.lsq",
+    "parameters": [
+      {
+        "name": "isOrderingNetwork",
+        "type": "boolean",
+        "eq": false
+      }
+    ],
     "generator": "/usr/bin/env python3 $DYNAMATIC/tools/backend/lsq-generator-python/lsq-generator.py -o $OUTPUT_DIR -c $OUTPUT_DIR/$MODULE_NAME.json --hdl vhdl",
     "use-json-config": "$OUTPUT_DIR/$MODULE_NAME.json",
     "hdl": "vhdl",
@@ -374,6 +399,31 @@
   },
   {
     "name": "handshake.lsq",
+    "parameters": [
+      {
+        "name": "isOrderingNetwork",
+        "type": "bool",
+        "eq": true
+      }
+    ],
+    "generator": "/usr/bin/env python3 $DYNAMATIC/tools/backend/ordering-network-generator-python/ordering-network-generator.py -o $OUTPUT_DIR -c $OUTPUT_DIR/$MODULE_NAME.json --hdl vhdl",
+    "use-json-config": "$OUTPUT_DIR/$MODULE_NAME.json",
+    "hdl": "vhdl",
+    "io-kind": "flat",
+    "io-map": [{ "clk": "clock" }, { "rst": "reset" }, { "*": "io_*" }],
+    "io-signals": {
+      "data": "_bits"
+    }
+  },
+  {
+    "name": "handshake.lsq",
+    "parameters": [
+      {
+        "name": "isOrderingNetwork",
+        "type": "bool",
+        "eq": false
+      }
+    ],
     "generator": "/usr/bin/env python3 $DYNAMATIC/tools/backend/lsq-generator-python/lsq-generator.py -o $OUTPUT_DIR -c $OUTPUT_DIR/$MODULE_NAME.json --hdl vhdl",
     "use-json-config": "$OUTPUT_DIR/$MODULE_NAME.json",
     "hdl": "vhdl",
