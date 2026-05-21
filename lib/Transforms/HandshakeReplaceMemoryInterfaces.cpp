@@ -51,7 +51,8 @@ struct HandshakeReplaceMemoryInterfacesPass
     : public dynamatic::impl::HandshakeReplaceMemoryInterfacesBase<
           HandshakeReplaceMemoryInterfacesPass> {
 
-  using HandshakeReplaceMemoryInterfacesBase::HandshakeReplaceMemoryInterfacesBase;
+  using HandshakeReplaceMemoryInterfacesBase::
+      HandshakeReplaceMemoryInterfacesBase;
 
   void runDynamaticPass() override;
 
@@ -178,9 +179,9 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::replaceForMemRef(
   }
 
   // Context and builder for creating new operation
-  handshake::MemOrderingKind orderingKind = useOrderingNetwork
-                                                ? handshake::MemOrderingKind::OrderingNetwork
-                                                : handshake::MemOrderingKind::LSQ;
+  handshake::MemOrderingKind orderingKind =
+      useOrderingNetwork ? handshake::MemOrderingKind::OrderingNetwork
+                         : handshake::MemOrderingKind::LSQ;
   MemoryInterfaceBuilder memBuilder(funcOp, memref, masterIface.getMemStart(),
                                     masterIface.getCtrlEnd(), ctrlVals,
                                     orderingKind);
@@ -350,10 +351,11 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::updateMemoryAccessMarks(
 
   for (Operation *accessOp : lsqAccessOps) {
     if (isLSQPort.lookup(accessOp)) {
-      handshake::MemOrderingKind kind = useOrderingNetwork
-                                            ? handshake::MemOrderingKind::OrderingNetwork
-                                            : handshake::MemOrderingKind::LSQ;
-      setDialectAttr<MemInterfaceAttr>(accessOp, ctx, groupMap.at(accessOp), kind);
+      handshake::MemOrderingKind kind =
+          useOrderingNetwork ? handshake::MemOrderingKind::OrderingNetwork
+                             : handshake::MemOrderingKind::LSQ;
+      setDialectAttr<MemInterfaceAttr>(accessOp, ctx, groupMap.at(accessOp),
+                                       kind);
     } else {
       setDialectAttr<MemInterfaceAttr>(accessOp, ctx);
     }
