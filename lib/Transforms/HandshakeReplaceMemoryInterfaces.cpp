@@ -175,10 +175,13 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::replaceForMemRef(
       lsqOp = ports.getLSQPort().getLSQOp();
   }
 
-  // Context and builder for creating new operation
+  // Context and builder for creating new operation. Preserve the existing
+  // LSQ's ordering kind (LSQ vs. OrderingNetwork) when rebuilding.
+  handshake::MemOrderingKind orderingKind =
+      lsqOp ? lsqOp.getOrderingKind() : handshake::MemOrderingKind::LSQ;
   MemoryInterfaceBuilder memBuilder(funcOp, memref, masterIface.getMemStart(),
                                     masterIface.getCtrlEnd(), ctrlVals,
-                                    handshake::MemOrderingKind::LSQ);
+                                    orderingKind);
 
   // Collect all access ports related to the memory region under consideration
   DenseSet<MemPortOpInterface> regionPorts;
@@ -344,9 +347,10 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::updateMemoryAccessMarks(
       markOpsWithActiveDependencies(lsqAccessOps);
 
   for (Operation *accessOp : lsqAccessOps) {
-    if (!isLSQPort.lookup(accessOp))
-      // mark the access op as a non-LSQ port by setting the attribute without a
-      // group ID
+    if (isLSQPort.lookup(accessOp))
+      setDialectAttr<MemInterfaceAttr>(accessOp, ctx, groupMap.at(accessOp),
+                                       handshake::MemOrderingKind::LSQ);
+    else
       setDialectAttr<MemInterfaceAttr>(accessOp, ctx);
   }
   return success();
