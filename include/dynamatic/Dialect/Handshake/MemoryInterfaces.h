@@ -237,6 +237,43 @@ private:
   /// passed through its port information.
   void fromPorts(FuncMemoryPorts &ports);
 };
+/// Configuration for a single load or store queue within the ordering network.
+/// Mirrors the Python QueueConfig in custom_core_gen/configs.py.
+struct QueueConfig {
+  std::string qType; // "load" or "store"
+  unsigned numEntries;
+  unsigned dataWidth;
+  unsigned addrWidth;
+  unsigned idWidth;
+  unsigned idVal;
+  unsigned ldpAddrWidth;
+  bool stResp = false;
+
+  QueueConfig(std::string qType, unsigned numEntries, unsigned dataWidth,
+              unsigned addrWidth, unsigned idWidth, unsigned idVal,
+              unsigned ldpAddrWidth)
+      : qType(std::move(qType)), numEntries(numEntries), dataWidth(dataWidth),
+        addrWidth(addrWidth), idWidth(idWidth), idVal(idVal),
+        ldpAddrWidth(ldpAddrWidth) {}
+
+  /// Converts this config to a DictionaryAttr suitable for use as an MLIR
+  /// attribute or for serialisation alongside other RTL generation parameters.
+  mlir::DictionaryAttr toAttrDict(mlir::MLIRContext *ctx) const;
+};
+
+/// Configuration for a dependency checker, which pairs a load queue and a
+/// store queue.
+struct DependencyCheckerConfig {
+  unsigned accessDisparityWidth;
+
+  explicit DependencyCheckerConfig(unsigned accessDisparityWidth)
+      : accessDisparityWidth(accessDisparityWidth) {}
+
+  /// Converts this config to a DictionaryAttr suitable for use as an MLIR
+  /// attribute or for serialisation alongside other RTL generation parameters.
+  mlir::DictionaryAttr toAttrDict(mlir::MLIRContext *ctx) const;
+};
+
 /// Represents a directed dependency edge between two memory access ports in an
 /// ordering network. `src` and `dst` are global port indices (in program order
 /// across all groups), and `dp` is the dependency distance from the
@@ -251,42 +288,30 @@ struct OrderingNetworkEdge {
 /// dependency graph over the access ports.
 struct OrderingNetworkGenerationInfo {
   /// The ordering network op for which generation information is being derived.
-  handshake::MemOrderingUnitOp lsqOp;
+  handshake::MemOrderingUnitOp memoryOrderingUnitOp;
   /// The name to give to the RTL module.
   std::string name;
-  /// Signals widths, for data and address buses.
-  unsigned dataWidth, addrWidth;
-  /// Number of groups, load ports, and store ports.
-  unsigned numGroups, numLoads, numStores;
-  /// Number of loads and stores per group.
-  SmallVector<unsigned> loadsPerGroup, storesPerGroup;
-  /// Overall indices for all load and store ports, split by group.
-  SmallVector<SmallVector<unsigned>> loadPorts, storePorts;
-  /// Maps each global port index (in program order across all groups) to its
-  /// group ID.
-  SmallVector<unsigned> vertexGroups;
   /// Dependency edges between ports derived from active MemDependenceAttrs.
   SmallVector<OrderingNetworkEdge> dependencyEdges;
-  /// Depth of queues within the ordering network.
-  unsigned depth = 16, depthLoad = 16, depthStore = 16, bufferDepth = 0;
-  /// Number of channels at memory interface.
-  unsigned numLdChannels = 1, numStChannels = 1;
-  /// Number of bits for ID in the memory interface.
-  unsigned indexWidth = 6;
   /// Indicate whether the store response channel is enabled.
   unsigned stResp = 0;
-  /// Indicate whether multiple groups are allowed to request allocation
-  /// simultaneously.
-  unsigned groupMulti = 0;
-  /// Indicate whether pipeline registers are inserted.
-  unsigned pipe0En = 0, pipe1En = 0, pipeCompEn = 0;
-  /// Indicate whether the head pointer of the load queue is updated one cycle
-  /// later than the valid bits of entries.
-  unsigned headLagEn = 0;
+
+  // maps the port indices to the queue configurations they belong to
+  SmallVector<unsigned> portsToQueue;
+
+  // basic block ID for each port, in program order
+  SmallVector<unsigned> portBBIds;
+
+  // Queue configs
+  SmallVector<QueueConfig> queues;
+
+  // Dependency checker configs
+  SmallVector<DependencyCheckerConfig> dependencyCheckers;
 
   /// Derives generation information for the provided ordering network op.
-  OrderingNetworkGenerationInfo(handshake::MemOrderingUnitOp lsqOp,
-                                StringRef name = "ordering_network");
+  OrderingNetworkGenerationInfo(
+      handshake::MemOrderingUnitOp memoryOrderingUnitOp,
+      StringRef name = "ordering_network");
 
   /// Derives generation information from pre-computed port information.
   OrderingNetworkGenerationInfo(FuncMemoryPorts &ports,

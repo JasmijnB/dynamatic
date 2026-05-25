@@ -506,6 +506,10 @@ private:
     parameters.emplace_back(StringAttr::get(ctx, name), attr);
   }
 
+  void addDict(const Twine &name, DictionaryAttr values) {
+    addParam(name, ArrayAttr::get(ctx, values));
+  }
+
   /// Adds a boolean-type parameter.
   void addBoolean(const Twine &name, bool value) {
     addParam(name, BoolAttr::get(ctx, value));
@@ -880,20 +884,6 @@ ModuleDiscriminator::ModuleDiscriminator(FuncMemoryPorts &ports) {
           addString("name", *modName);
           addBoolean("isOrderingNetwork", true);
           addBoolean("master", ports.interfacePorts.empty());
-          addUnsigned("fifoDepth", genInfo.depth);
-          addUnsigned("fifoDepth_L", genInfo.depthLoad);
-          addUnsigned("fifoDepth_S", genInfo.depthStore);
-          addUnsigned("bufferDepth", genInfo.bufferDepth);
-          addUnsigned("dataWidth", genInfo.dataWidth);
-          addUnsigned("addrWidth", genInfo.addrWidth);
-          addUnsigned("numBBs", genInfo.numGroups);
-          addUnsigned("numLoadPorts", genInfo.numLoads);
-          addUnsigned("numStorePorts", genInfo.numStores);
-          addArrayIntAttr("numLoads", genInfo.loadsPerGroup);
-          addArrayIntAttr("numStores", genInfo.storesPerGroup);
-          addArrayIntAttr("vertexGroups", genInfo.vertexGroups);
-          addBiArrayIntAttr("loadPorts", genInfo.loadPorts);
-          addBiArrayIntAttr("storePorts", genInfo.storePorts);
           // Dependency edges as three parallel arrays
           SmallVector<unsigned> edgeSrc, edgeDst, edgeDp;
           for (const OrderingNetworkEdge &edge : genInfo.dependencyEdges) {
@@ -904,8 +894,17 @@ ModuleDiscriminator::ModuleDiscriminator(FuncMemoryPorts &ports) {
           addArrayIntAttr("edgeSrc", edgeSrc);
           addArrayIntAttr("edgeDst", edgeDst);
           addArrayIntAttr("edgeDp", edgeDp);
-          addUnsigned("indexWidth", genInfo.indexWidth);
           addUnsigned("stResp", genInfo.stResp);
+          addArrayIntAttr("portBBIds", genInfo.portBBIds);
+          addArrayIntAttr("portsToQueue", genInfo.portsToQueue);
+          SmallVector<Attribute> queueAttrs;
+          for (const QueueConfig &q : genInfo.queues)
+            queueAttrs.push_back(q.toAttrDict(ctx));
+          addParam("queues", ArrayAttr::get(ctx, queueAttrs));
+          SmallVector<Attribute> dcAttrs;
+          for (const DependencyCheckerConfig &dc : genInfo.dependencyCheckers)
+            dcAttrs.push_back(dc.toAttrDict(ctx));
+          addParam("dependencyCheckers", ArrayAttr::get(ctx, dcAttrs));
         }
       })
       .Default([&](auto) {

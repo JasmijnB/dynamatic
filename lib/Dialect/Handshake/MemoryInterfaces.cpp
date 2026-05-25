@@ -423,65 +423,79 @@ void LSQGenerationInfo::fromPorts(FuncMemoryPorts &ports) {
 }
 
 //===----------------------------------------------------------------------===//
+// QueueConfig / DependencyCheckerConfig
+//===----------------------------------------------------------------------===//
+
+mlir::DictionaryAttr QueueConfig::toAttrDict(mlir::MLIRContext *ctx) const {
+  Builder b(ctx);
+  SmallVector<NamedAttribute> entries = {
+      {b.getStringAttr("QueueType"), b.getStringAttr(qType)},
+      {b.getStringAttr("NumEntries"), b.getUI32IntegerAttr(numEntries)},
+      {b.getStringAttr("DataWidth"), b.getUI32IntegerAttr(dataWidth)},
+      {b.getStringAttr("AddrWidth"), b.getUI32IntegerAttr(addrWidth)},
+      {b.getStringAttr("IDWidth"), b.getUI32IntegerAttr(idWidth)},
+      {b.getStringAttr("IDVal"), b.getUI32IntegerAttr(idVal)},
+      {b.getStringAttr("LDPAddrWidth"), b.getUI32IntegerAttr(ldpAddrWidth)},
+      {b.getStringAttr("StResp"), b.getBoolAttr(stResp)},
+  };
+  return DictionaryAttr::get(ctx, entries);
+}
+
+mlir::DictionaryAttr
+DependencyCheckerConfig::toAttrDict(mlir::MLIRContext *ctx) const {
+  Builder b(ctx);
+  SmallVector<NamedAttribute> entries = {
+      {b.getStringAttr("AccessDisparityWidth"),
+       b.getUI32IntegerAttr(accessDisparityWidth)},
+  };
+  return DictionaryAttr::get(ctx, entries);
+}
+
+//===----------------------------------------------------------------------===//
 // OrderingNetworkGenerationInfo
 //===----------------------------------------------------------------------===//
 
 OrderingNetworkGenerationInfo::OrderingNetworkGenerationInfo(
-    handshake::MemOrderingUnitOp lsqOp, StringRef name)
-    : lsqOp(lsqOp), name(name) {
-  FuncMemoryPorts ports = getMemoryPorts(lsqOp);
+    handshake::MemOrderingUnitOp memoryOrderingUnitOp, StringRef name)
+    : memoryOrderingUnitOp(memoryOrderingUnitOp), name(name) {
+  FuncMemoryPorts ports = getMemoryPorts(memoryOrderingUnitOp);
   fromPorts(ports);
 }
 
 OrderingNetworkGenerationInfo::OrderingNetworkGenerationInfo(
     FuncMemoryPorts &ports, StringRef name)
-    : lsqOp(cast<handshake::MemOrderingUnitOp>(ports.memOp)), name(name) {
+    : memoryOrderingUnitOp(cast<handshake::MemOrderingUnitOp>(ports.memOp)),
+      name(name) {
   fromPorts(ports);
 }
 
 void OrderingNetworkGenerationInfo::fromPorts(FuncMemoryPorts &ports) {
-  dataWidth = ports.dataWidth;
-  addrWidth = ports.addrWidth;
-
   // TODO: Calculate depth better
-  depthLoad = 4;
-  depthStore = 4;
-
-  numGroups = ports.getNumGroups();
-  numLoads = ports.getNumPorts<LoadPort>();
-  numStores = ports.getNumPorts<StorePort>();
+  const unsigned depthLoad = 4;
+  const unsigned depthStore = 4;
 
   // Assign a global port index to each access port (in program order across
   // all groups) and build the vertex→group mapping.
   unsigned globalIdx = 0;
-  unsigned loadIdx = 0, storeIdx = 0;
   DenseMap<StringRef, unsigned> nameToPortIdx;
 
   for (auto [groupID, groupPorts] : llvm::enumerate(ports.groups)) {
-    unsigned numLoadsInGroup = groupPorts.getNumPorts<LoadPort>();
-    unsigned numStoresInGroup = groupPorts.getNumPorts<StorePort>();
-    loadsPerGroup.push_back(numLoadsInGroup);
-    storesPerGroup.push_back(numStoresInGroup);
-
-    SmallVector<unsigned> groupLoadPorts, groupStorePorts;
-
     for (MemoryPort &accessPort : groupPorts.accessPorts) {
-      vertexGroups.push_back(groupID);
+      portBBIds.push_back(groupID);
       nameToPortIdx[getUniqueName(accessPort.portOp)] = globalIdx;
 
-      if (isa<LoadPort>(accessPort))
-        groupLoadPorts.push_back(loadIdx++);
-      else
-        groupStorePorts.push_back(storeIdx++);
+      if (isa<LoadPort>(accessPort)) {
+        portsToQueue.push_back(0); // index into queues: load config
+      } else {
+        portsToQueue.push_back(1); // index into queues: store config
+      }
 
       ++globalIdx;
     }
-
-    loadPorts.push_back(groupLoadPorts);
-    storePorts.push_back(groupStorePorts);
   }
 
-  // Build dependency edges from active MemDependenceAttrs on each access port.
+  // Build dependency edges from active MemDependenceAttrs on each access
+  // port.
   globalIdx = 0;
   for (GroupMemoryPorts &groupPorts : ports.groups) {
     for (MemoryPort &accessPort : groupPorts.accessPorts) {
@@ -501,5 +515,15 @@ void OrderingNetworkGenerationInfo::fromPorts(FuncMemoryPorts &ports) {
     }
   }
 
-  indexWidth = llvm::Log2_64_Ceil(depthLoad);
+  // Two shared queue configs: one for all load ports, one for all store
+  // ports. queues[0] = load queue, queues[1] = store queue.
+  // TODO: See if idWidth is still necessary (was for AXI interface)
+  queues.emplace_back("load", depthLoad, ports.dataWidth, ports.addrWidth,
+                      ports.addrWidth, /*idVal=*/0,
+                      llvm::Log2_64_Ceil(depthLoad));
+  queues.emplace_back("store", depthStore, ports.dataWidth, ports.addrWidth,
+                      ports.addrWidth, /*idVal=*/0,
+                      llvm::Log2_64_Ceil(depthStore));
+
+  dependencyCheckers.emplace_back(4); // Example config, to be refined
 }

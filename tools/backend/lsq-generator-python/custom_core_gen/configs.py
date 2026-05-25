@@ -8,17 +8,9 @@ class QueueConfig:
     addr_width:     int = 13  # Address width     (Number of bits for memory address)
     id_width:       int = 2  # ID width          (Number of bits for ID in the memory interface)
     id_val:         int = 0  # ID value          (ID value used for all requests in the queue)
-    bb_id:          int = 0  # Basic block ID    (Basic block this queue belongs to)
-    
     q_addr_width: int = 2  # queue address width
 
     st_resp: bool = False  # Whether store response channel in store access port is enabled)
-
-    pipe0: bool = False  # Enable pipeline register 0
-    pipe1: bool = False  # Enable pipeline register 1
-    pipe_comb: bool = False  # Enable pipeline register pipeComp
-    
-    master: bool = False # Whether the queue is a master
 
     def __init__(self, config: dict):
         self.q_type = config["QueueType"]
@@ -27,16 +19,10 @@ class QueueConfig:
         self.addr_width = config["AddrWidth"]
         self.id_width = config["IDWidth"]
         self.id_val = config["IDVal"]
-        self.bb_id = config.get("BasicBlockID", 0)
         self.ldp_addr_width = config["LDPAddrWidth"]
         self.st_resp = config["StResp"]
 
         self.q_addr_width = math.ceil(math.log2(self.num_entries))
-
-        self.pipe0 = bool(config["pipe0En"])
-        self.pipe1 = bool(config["pipe1En"])
-        self.pipeComp = bool(config["pipeCompEn"])
-        self.master = bool(config["master"])
 
         assert(self.q_type in ["load", "store"]), "QueueType must be either 'load' or 'store'"
         assert(self.num_entries > 0), "NumEntries must be greater than 0"
@@ -56,13 +42,11 @@ class QueueConfig:
 class DependencyCheckerConfig:
     pq: QueueConfig
     sq: QueueConfig
-    tail_offset_width: int = 2 
-    access_disparity_width: int = 2
+    access_disparity_width: int = 4
 
     def __init__(self, config: dict):
         self.pq = QueueConfig(config["PQConfig"])
         self.sq = QueueConfig(config["SQConfig"])
-        self.tail_offset_width = config.get("TailOffsetWidth", 3)
         self.access_disparity_width = config.get("AccessDisparityWidth", 2)
 
     @staticmethod
@@ -70,7 +54,6 @@ class DependencyCheckerConfig:
         obj = DependencyCheckerConfig.__new__(DependencyCheckerConfig)
         obj.pq = pq_config
         obj.sq = sq_config
-        obj.tail_offset_width = dc_config.get("TailOffsetWidth", 3)
         obj.access_disparity_width = dc_config.get("AccessDisparityWidth", 2)
         return obj
 
