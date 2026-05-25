@@ -18,13 +18,8 @@ load_config_dict = {
     "AddrWidth": 32,
     "IDWidth": 2,
     "IDVal": 0,
-    "BasicBlockID": 0,
     "LDPAddrWidth": 0,
     "StResp": False,
-    "pipe0En": False,
-    "pipe1En": False,
-    "pipeCompEn": False,
-    "master": False,
 }
 
 # Store queue is the successor (sq, config_id=1 in the dot file).
@@ -36,20 +31,14 @@ store_config_dict = {
     "AddrWidth": 32,
     "IDWidth": 2,
     "IDVal": 0,
-    "BasicBlockID": 0,
     "LDPAddrWidth": 0,
     "StResp": False,
-    "pipe0En": False,
-    "pipe1En": False,
-    "pipeCompEn": False,
-    "master": False,
 }
 
 configs = {
     "queue_0": load_config_dict,
     "queue_1": store_config_dict,
     "dp_0": {
-        "TailOffsetWidth": 4,
         "AccessDisparityWidth": 4,
     },
 }
