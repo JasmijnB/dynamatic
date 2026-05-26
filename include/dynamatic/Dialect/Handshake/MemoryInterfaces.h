@@ -247,14 +247,14 @@ struct QueueConfig {
   unsigned idWidth;
   unsigned idVal;
   unsigned ldpAddrWidth;
-  bool stResp = false;
+  bool stResp;
 
   QueueConfig(std::string qType, unsigned numEntries, unsigned dataWidth,
               unsigned addrWidth, unsigned idWidth, unsigned idVal,
-              unsigned ldpAddrWidth)
+              unsigned ldpAddrWidth, bool stResp)
       : qType(std::move(qType)), numEntries(numEntries), dataWidth(dataWidth),
         addrWidth(addrWidth), idWidth(idWidth), idVal(idVal),
-        ldpAddrWidth(ldpAddrWidth) {}
+        ldpAddrWidth(ldpAddrWidth), stResp(stResp) {}
 
   /// Converts this config to a DictionaryAttr suitable for use as an MLIR
   /// attribute or for serialisation alongside other RTL generation parameters.
@@ -293,9 +293,6 @@ struct OrderingNetworkGenerationInfo {
   std::string name;
   /// Dependency edges between ports derived from active MemDependenceAttrs.
   SmallVector<OrderingNetworkEdge> dependencyEdges;
-  /// Indicate whether the store response channel is enabled.
-  unsigned stResp = 0;
-
   // maps the port indices to the queue configurations they belong to
   SmallVector<unsigned> portsToQueue;
 

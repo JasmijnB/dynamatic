@@ -894,7 +894,6 @@ ModuleDiscriminator::ModuleDiscriminator(FuncMemoryPorts &ports) {
           addArrayIntAttr("edgeSrc", edgeSrc);
           addArrayIntAttr("edgeDst", edgeDst);
           addArrayIntAttr("edgeDp", edgeDp);
-          addUnsigned("stResp", genInfo.stResp);
           addArrayIntAttr("portBBIds", genInfo.portBBIds);
           addArrayIntAttr("portsToQueue", genInfo.portsToQueue);
           SmallVector<Attribute> queueAttrs;
