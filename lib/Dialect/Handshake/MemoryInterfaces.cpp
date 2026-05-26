@@ -209,7 +209,12 @@ MemoryInterfaceBuilder::determineInterfaceInputs(InterfaceInputs &inputs,
     inputs.lsqGroupSizes.push_back(lsqGroupOps.size());
   }
 
-  if (mcPorts.empty())
+  // Ordering networks always connect through a memory controller, so even when
+  // there are no direct MC circuit ports we still need to compute the block
+  // control signals (from LSQ stores) so that instantiateInterfaces creates the
+  // MC+ordering-network pair instead of a standalone ordering network.
+  if (mcPorts.empty() &&
+      orderingKind != handshake::MemOrderingKind::OrderingNetwork)
     return success();
 
   // The MC needs control signals from all blocks containing store ports
