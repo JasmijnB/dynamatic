@@ -62,7 +62,7 @@
         "eq": true
       }
     ],
-    "generator": "/usr/bin/env python3 $DYNAMATIC/tools/backend/lsq-python/ordering-network-generator.py -o $OUTPUT_DIR -c $OUTPUT_DIR/$MODULE_NAME.json --hdl vhdl",
+    "generator": "/usr/bin/env python3 $DYNAMATIC/tools/backend/lsq-generator-python/ordering-network-generator.py -o $OUTPUT_DIR -c $OUTPUT_DIR/$MODULE_NAME.json --hdl vhdl",
     "use-json-config": "$OUTPUT_DIR/$MODULE_NAME.json",
     "hdl": "vhdl",
     "io-kind": "flat",
