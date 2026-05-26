@@ -90,7 +90,7 @@ class Queue(Generator):
                 em.add_assignment(mem_exec_ready_o,  circ_exec_ready_i)
                 em.add_assignment(done_en, mem_exec_valid_i & circ_exec_ready_i)
             else:
-                em.add_assignment(mem_exec_ready_o, Val(1))
+                em.add_assignment(mem_exec_ready_o, Bit(1))
                 em.add_assignment(done_en, mem_exec_valid_i)
         else:
             em.add_assignment(mem_data_ready_o,   circ_data_ready_i)
@@ -204,7 +204,7 @@ class Queue(Generator):
         """
         can_issue = Logic(em, "can_issue", "w")
         em.add_assignment(can_issue,
-            (q_issue == q_head & load_en) | (q_issue != q_head) | q_full_w_issue)
+            ((q_issue == q_head) & load_en) | (q_issue != q_head) | q_full_w_issue)
         em.add_assignment(issue_en, can_issue & axi_ready_i)
         return can_issue
 
