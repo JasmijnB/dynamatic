@@ -1,7 +1,7 @@
 from core_gen.emitters import Emitter
 from core_gen.signals import *
 from core_gen.operators import CyclicRightShift, MuxLookUp, Reduce
-from core_gen.ir import BinOp, Bin, Val, Bit, CustomStatement, Type
+from core_gen.ir import BinOp, Bin, Val, Bit, CustomStatement
 from custom_core_gen.configs import DependencyCheckerConfig
 from custom_core_gen.generators.generator import Generator
 
@@ -36,21 +36,20 @@ class DependencyChecker(Generator):
         allow_sq_access_o = self._add_port(Logic(em, "allow_sq_access", "o"))
         allow_pq_access_o = self._add_port(Logic(em, "allow_pq_access", "o"))
         # TODO: Only allow predecessor access when the access disparity bit cannot overflow
-        em.add_assignment(allow_pq_access_o, Val(1)) 
+        em.add_assignment(allow_pq_access_o, Bit(1)) 
 
-        tail_offset      = LogicVec(em, "tail_offset",      "w", pq_ptr_width)
         access_disparity = LogicVec(em, "access_disparity", "r", self.configs.access_disparity_width, is_signed=True)
 
         conflict = Logic(em, "conflict", "w")
 
-        em.add_assignment(access_disparity, access_disparity - pq_done_en_i + sq_access_en_i)
+        em.add_assignment(access_disparity, access_disparity - Val(1).when(pq_done_en_i).else_(Val(0)) + Val(1).when(sq_access_en_i).else_(Val(0)))
         access_disparity.regInit()
 
         check_mask = LogicVec(em, "check_mask", "w", self.configs.pq.num_entries)
         ones = LogicVec(em, "ones", "w", self.configs.pq.num_entries)
         # generate access_disparity 1's for the check mask
         for i in range(self.configs.pq.num_entries):
-            em.add_assignment((ones, i), Bit(1).when(Val(str(i)) <= access_disparity).else_(Bit(0)))
+            em.add_assignment((ones, i), Bit(1).when(Val(i) <= access_disparity).else_(Bit(0)))
         CyclicRightShift(em, check_mask, ones, pq_done_i)
 
         tail_address = LogicVec(em, "tail_address", "w", self.configs.sq.addr_width)
@@ -58,22 +57,43 @@ class DependencyChecker(Generator):
 
         conflicts = LogicVec(em, "conflicts", "w", self.configs.pq.num_entries)
         for i in range(self.configs.pq.num_entries):
-            em.add_assignment((conflicts, i), Val(check_mask, i) & (Val(pq_addr_i, i) == tail_address))
+            em.add_assignment((conflicts, i), Val(check_mask, i).when(Val(pq_addr_i, i) == tail_address).else_(Bit(0)))
 
         Reduce(em, conflict, conflicts, BinOp.OR)
 
-        # tail_offset = how many PQ entries are allocated but not yet matched by SQ accesses
-        em.add_assignment(tail_offset, pq_length_i - access_disparity)
+        # Bring both operands to cmp_width bits so the equality check is type-safe.
+        # pq_length_i is non-negative so it gets zero-extended;
+        # access_disparity is signed so it gets sign-extended via resize when needed.
+        cmp_width = max(self.configs.access_disparity_width, pq_ptr_width)
+
+        pq_length_as_cmp = LogicVec(em, "pq_length_as_cmp", "w", cmp_width, is_signed=True)
+        pq_pad = cmp_width - pq_ptr_width
+        if pq_pad > 0:
+            em.add_assignment(pq_length_as_cmp, Val(0, pq_pad).concat(pq_length_i))
+        else:
+            em.add_assignment(pq_length_as_cmp, pq_length_i)
+
+        ad_pad = cmp_width - self.configs.access_disparity_width
+        if ad_pad > 0:
+            ad_as_cmp = LogicVec(em, "ad_as_cmp", "w", cmp_width, is_signed=True)
+            em.add_custom_statement(CustomStatement(
+                f"{ad_as_cmp.getNameWrite()} <= resize({access_disparity.getNameRead()}, {cmp_width});",
+                f"assign {ad_as_cmp.getNameWrite()} = {access_disparity.getNameRead()};",
+            ))
+        else:
+            ad_as_cmp = access_disparity
 
         em.add_comment("Allow access if:"
-                    "\t- The tail position is not 0 (i.e. the predecessor has allocated the corresponding entry for this access)"
+                    "\t- The access disparity has not yet reached the pq_length "
+                    "(i.e. the predecessor has allocated the corresponding entry for this access)"
                     "\t- AND, there is either: "
                     "       - no conflict  "
-                    "       - if the access disparity is negative, so the tail has moved past any preceding accesses from the predecessor"
-                    "\t- AND, the access disparity offset is not maxed out"
+                    "       - if the access disparity is negative, the tail has moved past preceding accesses"
+                    "\t- AND, the access disparity is not maxed out"
                     )
 
         max_ad_val = (1 << (self.configs.access_disparity_width - 1)) - 1
-        em.add_assignment(allow_sq_access_o, (tail_offset != Val(0, pq_ptr_width)) & (~conflict | (access_disparity < Val(0))) & (access_disparity <= Val(max_ad_val)))
+        em.add_assignment(allow_sq_access_o,
+            (pq_length_as_cmp != ad_as_cmp) & (~conflict | (access_disparity < Val(0))) & (access_disparity <= Val(max_ad_val)))
 
         self._write_to_file(em, path_rtl, out_file)
