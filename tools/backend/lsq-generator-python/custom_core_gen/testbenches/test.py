@@ -90,3 +90,51 @@ def test_simulate(testbench):
     assert result.returncode == 0 and not failures, (
         f"Simulation failed for {name}:\n" + ("\n".join(failures) or output)
     )
+
+
+@pytest.mark.skipif(not _has_tool("vsim"), reason="ModelSim/Questa not available")
+def test_simulate_vhdl(testbench):
+    name = testbench.name
+    tb_sv = testbench / f"{name}_tb.sv"
+
+    if not tb_sv.exists():
+        pytest.skip(f"no testbench file {tb_sv.name}")
+    if not any((testbench / "out").glob("*.vhd")):
+        pytest.skip(f"no generated VHDL in out/ — run test_generate first")
+
+    out_dir = testbench / "out"
+    env = {**os.environ, "PYTHONPATH": str(LSQ_ROOT)}
+
+    if (out_dir / "work").is_dir():
+        subprocess.run(["vdel", "-all", "-lib", "work"], cwd=out_dir, env=env, check=True)
+
+    subprocess.run(["vlib", "work"], cwd=out_dir, env=env, check=True)
+
+    vhd_files = sorted(out_dir.glob("*.vhd"))
+    subprocess.run(
+        ["vcom", "-2019", "-explicit", "-vopt"] + [f.name for f in vhd_files],
+        cwd=out_dir, env=env, check=True,
+    )
+    subprocess.run(
+        ["vlog", "-sv", str(tb_sv)],
+        cwd=out_dir, env=env, check=True,
+    )
+
+    result = subprocess.run(
+        [
+            "vsim", "-c",
+            "-wlf", "output_vhdl.wlf",
+            "-voptargs=+acc",
+            f"{name}_tb",
+            "-do", "log -r /*; run -all; quit",
+        ],
+        cwd=out_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+    failures = [line for line in output.splitlines() if "FAIL" in line or "TIMEOUT" in line]
+    assert result.returncode == 0 and not failures, (
+        f"VHDL simulation failed for {name}:\n" + ("\n".join(failures) or output)
+    )
