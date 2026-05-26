@@ -112,7 +112,7 @@ def test_simulate_vhdl(testbench):
 
     vhd_files = sorted(out_dir.glob("*.vhd"))
     subprocess.run(
-        ["vcom", "-2019", "-explicit", "-vopt"] + [f.name for f in vhd_files],
+        ["vcom", "-2019", "-vopt"] + [f.name for f in vhd_files],
         cwd=out_dir, env=env, check=True,
     )
     subprocess.run(
