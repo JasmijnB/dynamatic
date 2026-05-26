@@ -41,8 +41,12 @@ class DependencyChecker(Generator):
         access_disparity = LogicVec(em, "access_disparity", "r", self.configs.access_disparity_width, is_signed=True)
 
         conflict = Logic(em, "conflict", "w")
-
-        em.add_assignment(access_disparity, access_disparity - Val(1).when(pq_done_en_i).else_(Val(0)) + Val(1).when(sq_access_en_i).else_(Val(0)))
+        
+        inc_ad = LogicVec(em, "inc_access_disparity", "w", 1)
+        dec_ad = LogicVec(em, "dec_access_disparity", "w", 1)
+        em.add_assignment(inc_ad, Val(1).when(sq_access_en_i).else_(Val(0)))
+        em.add_assignment(dec_ad, Val(1).when(pq_done_en_i).else_(Val(0)))
+        em.add_assignment(access_disparity, (access_disparity + inc_ad) - dec_ad)
         access_disparity.regInit()
 
         check_mask = LogicVec(em, "check_mask", "w", self.configs.pq.num_entries)
@@ -85,11 +89,11 @@ class DependencyChecker(Generator):
 
         em.add_comment("Allow access if:"
                     "\t- The access disparity has not yet reached the pq_length "
-                    "(i.e. the predecessor has allocated the corresponding entry for this access)"
-                    "\t- AND, there is either: "
-                    "       - no conflict  "
-                    "       - if the access disparity is negative, the tail has moved past preceding accesses"
-                    "\t- AND, the access disparity is not maxed out"
+                    "(i.e. the predecessor has allocated the corresponding entry for this access)\n"
+                    "\t- AND, there is either: \n"
+                    "       - no conflict  \n"
+                    "       - if the access disparity is negative, the tail has moved past preceding accesses\n"
+                    "\t- AND, the access disparity is not maxed out\n"
                     )
 
         max_ad_val = (1 << (self.configs.access_disparity_width - 1)) - 1
