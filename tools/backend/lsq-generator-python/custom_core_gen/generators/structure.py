@@ -2,7 +2,7 @@
 
 from core_gen.emitters import Emitter
 from core_gen.signals import *
-from core_gen.ir import BinOp, Bin, Val, Bit, CustomStatement, Type, reduce_bin
+from core_gen.ir import BinOp, Bit, reduce_bin
 from custom_core_gen.configs import OrderingNetworkConfig
 from custom_core_gen.generators.queue import Queue
 from custom_core_gen.generators.dependency_checker import DependencyChecker
@@ -208,8 +208,8 @@ class Structure(Generator):
         defaults = {}
         defaults["allow_alloc_i"] = Logic(em, "allow_alloc_default", "w")
         defaults["allow_access_i"] = Logic(em, "allow_access_default", "w")
-        em.add_assignment(defaults["allow_alloc_i"], Val(1))
-        em.add_assignment(defaults["allow_access_i"], Val(1))
+        em.add_assignment(defaults["allow_alloc_i"], Bit(1))
+        em.add_assignment(defaults["allow_access_i"], Bit(1))
 
         for queue in queue_instances.values():
             queue.instantiate(em, defaults)
