@@ -1,0 +1,37 @@
+{
+  "name": "structure_simple",
+  "master": false,
+  "edgeSrc": [0],
+  "edgeDst": [1],
+  "edgeDp": [0],
+  "stResp": 0,
+  "portBBIds": [0, 0],
+  "portsToQueue": [0, 1],
+  "queues": [
+    {
+      "QueueType": "load",
+      "NumEntries": 4,
+      "DataWidth": 32,
+      "AddrWidth": 32,
+      "IDWidth": 2,
+      "IDVal": 0,
+      "LDPAddrWidth": 0,
+      "StResp": false
+    },
+    {
+      "QueueType": "store",
+      "NumEntries": 4,
+      "DataWidth": 32,
+      "AddrWidth": 32,
+      "IDWidth": 2,
+      "IDVal": 0,
+      "LDPAddrWidth": 0,
+      "StResp": false
+    }
+  ],
+  "dependencyCheckers": [
+    {
+      "AccessDisparityWidth": 4
+    }
+  ]
+}
