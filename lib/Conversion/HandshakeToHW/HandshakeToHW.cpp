@@ -883,7 +883,6 @@ ModuleDiscriminator::ModuleDiscriminator(FuncMemoryPorts &ports) {
           modName = getOpName() + "_" + genInfo.name;
           addString("name", *modName);
           addBoolean("isOrderingNetwork", true);
-          addBoolean("master", ports.interfacePorts.empty());
           // Dependency edges as three parallel arrays
           SmallVector<unsigned> edgeSrc, edgeDst, edgeDp;
           for (const OrderingNetworkEdge &edge : genInfo.dependencyEdges) {

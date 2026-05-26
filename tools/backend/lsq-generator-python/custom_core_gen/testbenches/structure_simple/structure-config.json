@@ -1,6 +1,5 @@
 {
   "name": "structure_simple",
-  "master": false,
   "edgeSrc": [0],
   "edgeDst": [1],
   "edgeDp": [0],

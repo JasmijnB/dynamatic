@@ -55,7 +55,6 @@ class DependencyCheckerConfig:
 
 class OrderingNetworkConfig:
     name: str
-    master: bool
     edge_src: list
     edge_dst: list
     edge_dp: list
@@ -66,7 +65,6 @@ class OrderingNetworkConfig:
 
     def __init__(self, config: dict):
         self.name = config["name"]
-        self.master = config["master"]
         self.edge_src = config["edgeSrc"]
         self.edge_dst = config["edgeDst"]
         self.edge_dp = config["edgeDp"]
