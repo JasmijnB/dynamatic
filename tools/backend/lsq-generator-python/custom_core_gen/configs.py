@@ -59,7 +59,6 @@ class OrderingNetworkConfig:
     edge_src: list
     edge_dst: list
     edge_dp: list
-    st_resp: int
     port_bb_ids: list
     ports_to_queue: list
     queues: list   # list[QueueConfig]
@@ -71,7 +70,6 @@ class OrderingNetworkConfig:
         self.edge_src = config["edgeSrc"]
         self.edge_dst = config["edgeDst"]
         self.edge_dp = config["edgeDp"]
-        self.st_resp = config["stResp"]
         self.port_bb_ids = config["portBBIds"]
         self.ports_to_queue = config["portsToQueue"]
         self.queues = [QueueConfig(q) for q in config["queues"]]
