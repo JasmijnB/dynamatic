@@ -36,12 +36,14 @@ class QueueConfig:
 class DependencyCheckerConfig:
     pq: 'QueueConfig'
     sq: 'QueueConfig'
+    succ_can_execute_once: bool = False # Whether this dependency checker checks for dependencies in reverse order
     access_disparity_width: int = 4
 
     def __init__(self, config: dict, pq: 'QueueConfig'=None, sq: 'QueueConfig'=None):
         self.pq = pq
         self.sq = sq
-        self.access_disparity_width = config.get("AccessDisparityWidth", 4)
+        self.succ_can_execute_once = config.get("succCanExecuteOnce")
+        self.access_disparity_width = config.get("AccessDisparityWidth")
 
     @staticmethod
     def from_parts(dc_config: dict, pq: 'QueueConfig',
@@ -49,7 +51,8 @@ class DependencyCheckerConfig:
         obj = DependencyCheckerConfig.__new__(DependencyCheckerConfig)
         obj.pq = pq
         obj.sq = sq
-        obj.access_disparity_width = dc_config.get("AccessDisparityWidth", 4)
+        obj.access_disparity_width = dc_config.get("AccessDisparityWidth")
+        obj.succ_can_execute_once = dc_config.get("succCanExecuteOnce")
         return obj
 
 

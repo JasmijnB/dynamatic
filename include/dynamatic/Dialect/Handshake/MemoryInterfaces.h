@@ -265,21 +265,16 @@ struct QueueConfig {
 /// store queue.
 struct DependencyCheckerConfig {
   unsigned accessDisparityWidth;
+  bool succCanExecuteOnce;
 
-  explicit DependencyCheckerConfig(unsigned accessDisparityWidth)
-      : accessDisparityWidth(accessDisparityWidth) {}
+  explicit DependencyCheckerConfig(unsigned accessDisparityWidth,
+                                   bool succCanExecuteOnce)
+      : accessDisparityWidth(accessDisparityWidth),
+        succCanExecuteOnce(succCanExecuteOnce) {}
 
   /// Converts this config to a DictionaryAttr suitable for use as an MLIR
   /// attribute or for serialisation alongside other RTL generation parameters.
   mlir::DictionaryAttr toAttrDict(mlir::MLIRContext *ctx) const;
-};
-
-/// Represents a directed dependency edge between two memory access ports in an
-/// ordering network. `src` and `dst` are global port indices (in program order
-/// across all groups), and `dp` is the dependency distance from the
-/// corresponding MemDependenceAttr.
-struct OrderingNetworkEdge {
-  unsigned src, dst, dp;
 };
 
 /// Holds all information needed to generate an ordering network RTL module for
@@ -291,8 +286,8 @@ struct OrderingNetworkGenerationInfo {
   handshake::MemOrderingUnitOp memoryOrderingUnitOp;
   /// The name to give to the RTL module.
   std::string name;
-  /// Dependency edges between ports derived from active MemDependenceAttrs.
-  SmallVector<OrderingNetworkEdge> dependencyEdges;
+  /// Dependency edges between ports
+  SmallVector<unsigned> sources, destinations, edgesToDp;
   // maps the port indices to the queue configurations they belong to
   SmallVector<unsigned> portsToQueue;
 

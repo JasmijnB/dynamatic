@@ -452,6 +452,9 @@ DependencyCheckerConfig::toAttrDict(mlir::MLIRContext *ctx) const {
   SmallVector<NamedAttribute> entries = {
       {b.getStringAttr("AccessDisparityWidth"),
        b.getUI32IntegerAttr(accessDisparityWidth)},
+      {b.getStringAttr("succCanExecuteOnce"),
+       b.getBoolAttr(succCanExecuteOnce)},
+
   };
   return DictionaryAttr::get(ctx, entries);
 }
@@ -515,8 +518,8 @@ void OrderingNetworkGenerationInfo::fromPorts(FuncMemoryPorts &ports) {
             auto dstIt = nameToPortIdx.find(dep.getDstAccess());
             assert(dstIt != nameToPortIdx.end() &&
                    "dependency destination not found among ports");
-            dependencyEdges.push_back(
-                {globalIdx, dstIt->second, dep.getDistance()});
+            sources.push_back(globalIdx);
+            destinations.push_back(dstIt->second);
           }
         }
       }
@@ -537,5 +540,12 @@ void OrderingNetworkGenerationInfo::fromPorts(FuncMemoryPorts &ports) {
                       ports.addrWidth, /*idVal=*/0,
                       llvm::Log2_64_Ceil(depthStore), stResp);
 
-  dependencyCheckers.emplace_back(4); // Example config, to be refined
+  for (unsigned i = 0; i < sources.size(); i++) {
+    // if the source is ahead of the destination in program order,
+    // the source is allowed to execute once before waiting on the destination
+    // TODO: 8 is a random access disparity width
+    bool succCanExecuteOnce = sources[i] > destinations[i];
+    edgesToDp.push_back(i);
+    dependencyCheckers.emplace_back(8, succCanExecuteOnce);
+  }
 }
