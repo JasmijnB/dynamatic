@@ -451,7 +451,12 @@ class VHDLEmitter(Emitter):
 
     @staticmethod
     def int_to_str(din: int, size=None, meta=None) -> str:
-        if meta is not None and meta.type in (Type.ARITH, Type.SIGNED):
+        if meta is not None and meta.type == Type.ARITH:
+            return str(din)
+
+        if meta is not None and meta.type == Type.SIGNED:
+            if din < 0:
+                return f"to_signed({din}, {size})"
             return str(din)
 
         if size == None:
