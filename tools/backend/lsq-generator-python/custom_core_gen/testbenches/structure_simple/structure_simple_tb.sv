@@ -426,6 +426,90 @@ initial begin
     end
 
     // ------------------------------------------------------------------
+    // TEST 7: Stress — N pairs at conflicting addresses.
+    //         Every load/store pair shares the same address, so every
+    //         store has a WAR dependency on its paired load.
+    //         A concurrent monitor flags two classes of violation:
+    //           (a) both queues drive mem_addr_valid for the same address
+    //               in the same cycle (simultaneous memory access),
+    //           (b) a store issues (rising edge on st_mem_addr_valid)
+    //               before the corresponding load has returned data to
+    //               the kernel (program-order violation).
+    // ------------------------------------------------------------------
+    test_counter = 7;
+    reset();
+    begin
+        localparam int N = 20;
+        logic [ADDR_W-1:0] addrs[N];
+        logic [DATA_W-1:0] ld_datas[N];
+        int ld_done;
+        int st_issued;
+
+        ld_done   = 0;
+        st_issued = 0;
+
+        for (int i = 0; i < N; i++)
+            // set all addresses to be the same
+            addrs[i] = 32'hC000_0000;
+
+        fork
+            // Kernel: inject load addresses
+            begin
+                for (int i = 0; i < N; i++) begin
+                    ticks($urandom_range(0, 2));
+                    ld_send_addr(addrs[i]);
+                end
+            end
+            // Kernel: inject store addresses (same as loads — all pairs conflict)
+            begin
+                for (int i = 0; i < N; i++) begin
+                    ticks($urandom_range(0, 2));
+                    st_send_addr(addrs[i]);
+                end
+            end
+            // Memory: service load address requests and return data
+            begin
+                for (int i = 0; i < N; i++) begin
+                    ticks($urandom_range(0, 4));
+                    ld_mem_respond(addrs[i], addrs[i] + 32'h200);
+                end
+            end
+            // Kernel: consume load return data
+            begin
+                for (int i = 0; i < N; i++)
+                    ld_recv_data(ld_datas[i]);
+            end
+            // Memory: service store requests (only issued once each WAR clears)
+            begin
+                for (int i = 0; i < N; i++) begin
+                    ticks($urandom_range(0, 2));
+                    st_mem_respond(addrs[i], 32'hEEEE_0000 + i);
+                end
+            end
+            // Monitor: flag simultaneous same-address access and ordering violations
+            begin
+                while (st_issued < N) begin
+                    @(posedge clk); 
+                    if (ld_mem_data_valid && ld_mem_data_ready) ld_done++;
+                    if (st_mem_addr_valid && ld_done <= st_issued) begin
+                        $display("FAIL [T7: store %0d issued before load %0d completed]",
+                                 st_issued+1, ld_done);
+                        fail_count++;
+                    end
+                    if (st_mem_addr_valid && st_mem_addr_ready) st_issued++;
+                end
+            end
+        join
+
+        for (int i = 0; i < N; i++)
+            check(ld_datas[i], addrs[i] + 32'h200, $sformatf("T7: ld data[%0d]", i));
+        $display("T7: All %0d conflicting pairs completed without violations", N);
+        ticks(10);
+        check(ld_empty, 1, "T7: load queue drained");
+        check(st_empty, 1, "T7: store queue drained");
+    end
+
+    // ------------------------------------------------------------------
     // Summary
     // ------------------------------------------------------------------
     $display("\n%0d test(s) failed.", fail_count);
