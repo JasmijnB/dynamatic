@@ -21,7 +21,7 @@ class DependencyChecker(Generator):
             em, "pq_addr", "i", self.configs.pq.num_entries, self.configs.pq.addr_width
         ))
         pq_done_i    = self._add_port(LogicVec(em, "pq_done",    "i", self.configs.pq.q_addr_width))
-        pq_done_en_i = self._add_port(Logic   (em, "pq_send_en", "i"))
+        pq_done_en_i = self._add_port(Logic   (em, "pq_done_en", "i"))
         pq_length_i  = self._add_port(LogicVec(em, "pq_length",  "i", pq_ptr_width))
 
         # ====[ successor ]===

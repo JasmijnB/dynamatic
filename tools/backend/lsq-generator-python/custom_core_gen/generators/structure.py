@@ -14,7 +14,7 @@ from collections import defaultdict
 DC_TO_PQ_MAP = {
     "pq_addr_i":    "q_addr_o",
     "pq_done_i":    "done_ptr_o",
-    "pq_send_en_i": "done_en_o",
+    "pq_done_en_i": "done_en_o",
     "pq_length_i":  "length_o",
     "allow_pq_access_o" : "allow_access_i",
 }
