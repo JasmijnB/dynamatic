@@ -75,17 +75,21 @@ class Emitter:
     def un_to_str(self, un, meta: 'Meta') -> str:
         raise NotImplementedError("Emitter subclasses must implement un_to_str()")
 
-    def assigned_var_to_str(self, var):
-        from core_gen.signals import Logic
+    def assigned_var_to_str(self, var, use_read_name=False):
+        from core_gen.signals import Logic, LogicVecArray
+
+        get_name = (lambda s, *a: s.getNameRead(*a)) if use_read_name else (lambda s, *a: s.getNameWrite(*a))
 
         size = 1
         if type(var) == tuple:
             if len(var) == 2:
-                str_ret = f"{var[0].getNameWrite(var[1])}"
+                str_ret = get_name(var[0], var[1])
             else:
-                str_ret = f"{var[0].getNameWrite(var[1], var[2])}"
+                str_ret = get_name(var[0], var[1], var[2])
+            if isinstance(var[0], LogicVecArray):
+                size = var[0].size
         else:
-            str_ret = f"{var.getNameWrite()}"
+            str_ret = get_name(var)
             if type(var) != Logic:
                 size = var.size
 

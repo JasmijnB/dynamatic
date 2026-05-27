@@ -1,5 +1,5 @@
 from core_gen.emitters.emitter import Emitter, Meta
-from core_gen.ir import Statement, Bin, Un, BinOp, UnOp, Bit, WhenElse, Type
+from core_gen.ir import Statement, Bin, Un, BinOp, UnOp, Bit, WhenElse, Type, Val
 from core_gen.signals import Logic, LogicVec, LogicArray, LogicVecArray
 
 
@@ -34,21 +34,23 @@ class VHDLEmitter(Emitter):
         return f"end process;\n"
 
     def add_reg_str(self, code: str):
-        self.regInitString += code
+        self.regInitString += self.get_current_indent() + code + "\n"
 
     def add_comment(self, comment: str):
         for line in comment.split("\n"):
             self.statementString += self.get_current_indent() + f"-- {line}\n"
 
-    def add_assignment(self, out, statement: Statement, in_process=False):
-        out_str, size = self.assigned_var_to_str(out)
+    def add_assignment(self, out, statement: Statement, in_process=False, to_reg_str=False):
+        out_str, size = self.assigned_var_to_str(out, use_read_name=to_reg_str)
         out_type = out.get_type() if isinstance(out, Logic) else Type.LOGIC
         meta = Meta(size, out_type, -1)
         statement_str = statement.to_str(self, meta)
         statement_str = self.fix_type(out_type, statement.get_type(), statement_str)
-        self.statementString += (
-            self.get_current_indent() + f"{out_str} <= {statement_str};\n"
-        )
+        line = self.get_current_indent() + f"{out_str} <= {statement_str};\n"
+        if to_reg_str:
+            self.regInitString += line
+        else:
+            self.statementString += line
 
     def get_definition_str(self, module_name: str, write_regs=True) -> str:
         return (
@@ -330,72 +332,82 @@ class VHDLEmitter(Emitter):
         assert logic.type == "r"
         if init is None:
             init = 0
-        if init != None:
-            self.add_reg_str(f"\t\tif ({self.reset_name} = '1') then\n")
-            self.add_reg_str(
-                f"\t\t\t{logic.getNameRead()} <= {self.in_to_bits(init)};\n"
-            )
-            self.add_reg_str(f"\t\telsif (rising_edge({self.clock_name})) then\n")
+        self.increase_indent()  # 1→2
+        if init is not None:
+            self.add_reg_str(f"if ({self.reset_name} = '1') then")
+            self.increase_indent()  # 2→3
+            self.add_assignment(logic, Bit(init), to_reg_str=True)
+            self.decrease_indent()  # 3→2
+            self.add_reg_str(f"elsif (rising_edge({self.clock_name})) then")
         else:
-            self.add_reg_str(f"\t\tif (rising_edge({self.clock_name})) then\n")
-        if enable != None:
-            self.add_reg_str(f"\t\t\tif ({enable.getNameRead()} = '1') then\n")
-            self.add_reg_str(
-                f"\t\t\t\t{logic.getNameRead()} <= {logic.getNameWrite()};\n"
-            )
-            self.add_reg_str("\t\t\tend if;\n")
+            self.add_reg_str(f"if (rising_edge({self.clock_name})) then")
+        self.increase_indent()  # 2→3
+        if enable is not None:
+            self.add_reg_str(f"if ({enable.getNameRead()} = '1') then")
+            self.increase_indent()  # 3→4
+            self.add_assignment(logic, Val(logic.getNameWrite()), to_reg_str=True)
+            self.decrease_indent()  # 4→3
+            self.add_reg_str("end if;")
         else:
-            self.add_reg_str(
-                f"\t\t\t{logic.getNameRead()} <= {logic.getNameWrite()};\n"
-            )
-        self.add_reg_str("\t\tend if;\n")
+            self.add_assignment(logic, Val(logic.getNameWrite()), to_reg_str=True)
+        self.decrease_indent()  # 3→2
+        self.add_reg_str("end if;")
+        self.decrease_indent()  # 2→1
 
     def logicvec_reg_init(self, vec: LogicVec, enable=None, init=None) -> None:
         assert vec.type == "r"
         if init is None:
             init = 0
-        if init != None:
-            self.add_reg_str(f"\t\tif ({self.reset_name} = '1') then\n")
-            self.add_reg_str(
-                f"\t\t\t{vec.getNameRead()} <= {self.int_to_str(init, vec.size)};\n"
-            )
-            self.add_reg_str(f"\t\telsif (rising_edge({self.clock_name})) then\n")
+        self.increase_indent()  # 1→2
+        if init is not None:
+            self.add_reg_str(f"if ({self.reset_name} = '1') then")
+            self.increase_indent()  # 2→3
+            self.add_assignment(vec, Val(init), to_reg_str=True)
+            self.decrease_indent()  # 3→2
+            self.add_reg_str(f"elsif (rising_edge({self.clock_name})) then")
         else:
-            self.add_reg_str(f"\t\tif (rising_edge({self.clock_name})) then\n")
-        if enable != None:
-            self.add_reg_str(f"\t\t\tif ({enable.getNameRead()} = '1') then\n")
-            self.add_reg_str(f"\t\t\t\t{vec.getNameRead()} <= {vec.getNameWrite()};\n")
-            self.add_reg_str("\t\t\tend if;\n")
+            self.add_reg_str(f"if (rising_edge({self.clock_name})) then")
+        self.increase_indent()  # 2→3
+        if enable is not None:
+            self.add_reg_str(f"if ({enable.getNameRead()} = '1') then")
+            self.increase_indent()  # 3→4
+            self.add_assignment(vec, Val(vec.getNameWrite()), to_reg_str=True)
+            self.decrease_indent()  # 4→3
+            self.add_reg_str("end if;")
         else:
-            self.add_reg_str(f"\t\t\t{vec.getNameRead()} <= {vec.getNameWrite()};\n")
-        self.add_reg_str("\t\tend if;\n")
+            self.add_assignment(vec, Val(vec.getNameWrite()), to_reg_str=True)
+        self.decrease_indent()  # 3→2
+        self.add_reg_str("end if;")
+        self.decrease_indent()  # 2→1
 
     def logicarray_reg_init(self, array: LogicArray, enable=None, init=None) -> None:
         assert array.type == "r"
         if init is None:
             init = [0] * array.length
-        if init != None:
-            self.add_reg_str(f"\t\tif ({self.reset_name} = '1') then\n")
-            for i in range(0, array.length):
-                self.add_reg_str(
-                    f"\t\t\t{array.getNameRead(i)} <= {self.int_to_str(init[i])};\n"
-                )
-            self.add_reg_str(f"\t\telsif (rising_edge({self.clock_name})) then\n")
+        self.increase_indent()  # 1→2
+        if init is not None:
+            self.add_reg_str(f"if ({self.reset_name} = '1') then")
+            self.increase_indent()  # 2→3
+            for i in range(array.length):
+                self.add_assignment((array, i), Bit(init[i]), to_reg_str=True)
+            self.decrease_indent()  # 3→2
+            self.add_reg_str(f"elsif (rising_edge({self.clock_name})) then")
         else:
-            self.add_reg_str(f"\t\tif (rising_edge({self.clock_name})) then\n")
-        if enable != None:
-            for i in range(0, array.length):
-                self.add_reg_str(f"\t\t\tif ({enable.getNameRead(i)} = '1') then\n")
-                self.add_reg_str(
-                    f"\t\t\t\t{array.getNameRead(i)} <= {array.getNameWrite(i)};\n"
-                )
-                self.add_reg_str("\t\t\tend if;\n")
+            self.add_reg_str(f"if (rising_edge({self.clock_name})) then")
+        self.increase_indent()  # 2→3
+        if enable is not None:
+            for i in range(array.length):
+                self.add_reg_str(f"if ({enable.getNameRead(i)} = '1') then")
+                self.increase_indent()  # 3→4
+                self.add_assignment((array, i), Val(array.getNameWrite(i)), to_reg_str=True)
+                self.decrease_indent()  # 4→3
+                self.add_reg_str("end if;")
         else:
-            for i in range(0, array.length):
-                self.add_reg_str(
-                    f"\t\t\t{array.getNameRead(i)} <= {array.getNameWrite(i)};\n"
-                )
-        self.add_reg_str("\t\tend if;\n")
+            for i in range(array.length):
+                self.add_assignment((array, i), Val(array.getNameWrite(i)), to_reg_str=True)
+        self.decrease_indent()  # 3→2
+        self.add_reg_str("end if;")
+        self.decrease_indent()  # 2→1
 
     def logicvecarray_reg_init(
         self, array: LogicVecArray, enable=None, init=None
@@ -403,28 +415,30 @@ class VHDLEmitter(Emitter):
         assert array.type == "r"
         if init is None:
             init = [0] * array.length
-        if init != None:
-            self.add_reg_str(f"\t\tif ({self.reset_name} = '1') then\n")
-            for i in range(0, array.length):
-                self.add_reg_str(
-                    f"\t\t\t{array.getNameRead(i)} <= {self.int_to_str(init[i], array.size)};\n"
-                )
-            self.add_reg_str(f"\t\telsif (rising_edge({self.clock_name})) then\n")
+        self.increase_indent()  # 1→2
+        if init is not None:
+            self.add_reg_str(f"if ({self.reset_name} = '1') then")
+            self.increase_indent()  # 2→3
+            for i in range(array.length):
+                self.add_assignment((array, i), Val(init[i]), to_reg_str=True)
+            self.decrease_indent()  # 3→2
+            self.add_reg_str(f"elsif (rising_edge({self.clock_name})) then")
         else:
-            self.add_reg_str(f"\t\tif (rising_edge({self.clock_name})) then\n")
-        if enable != None:
-            for i in range(0, array.length):
-                self.add_reg_str(f"\t\t\tif ({enable.getNameRead(i)} = '1') then\n")
-                self.add_reg_str(
-                    f"\t\t\t\t{array.getNameRead(i)} <= {array.getNameWrite(i)};\n"
-                )
-                self.add_reg_str("\t\t\tend if;\n")
+            self.add_reg_str(f"if (rising_edge({self.clock_name})) then")
+        self.increase_indent()  # 2→3
+        if enable is not None:
+            for i in range(array.length):
+                self.add_reg_str(f"if ({enable.getNameRead(i)} = '1') then")
+                self.increase_indent()  # 3→4
+                self.add_assignment((array, i), Val(array.getNameWrite(i)), to_reg_str=True)
+                self.decrease_indent()  # 4→3
+                self.add_reg_str("end if;")
         else:
-            for i in range(0, array.length):
-                self.add_reg_str(
-                    f"\t\t\t{array.getNameRead(i)} <= {array.getNameWrite(i)};\n"
-                )
-        self.add_reg_str("\t\tend if;\n")
+            for i in range(array.length):
+                self.add_assignment((array, i), Val(array.getNameWrite(i)), to_reg_str=True)
+        self.decrease_indent()  # 3→2
+        self.add_reg_str("end if;")
+        self.decrease_indent()  # 2→1
 
     def get_file_suffix(self) -> str:
         return "vhd"

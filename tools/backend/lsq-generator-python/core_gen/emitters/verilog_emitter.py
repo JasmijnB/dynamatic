@@ -1,5 +1,5 @@
 from core_gen.emitters.emitter import Emitter, Meta
-from core_gen.ir import Statement, Bin, Un, BinOp, UnOp, Bit, Type
+from core_gen.ir import Statement, Bin, Un, BinOp, UnOp, Bit, Type, Val
 from core_gen.signals import Logic, LogicVec, LogicArray, LogicVecArray
 
 
@@ -35,8 +35,8 @@ class VerilogEmitter(Emitter):
         for line in comment.split("\n"):
             self.statementString += self.get_current_indent() + f"// {line}\n"
 
-    def add_assignment(self, out, statement: Statement, in_process=False):
-        out_str, size = self.assigned_var_to_str(out)
+    def add_assignment(self, out, statement: Statement, in_process=False, to_reg_str=False):
+        out_str, size = self.assigned_var_to_str(out, use_read_name=to_reg_str)
         out_type = out.get_type() if isinstance(out, Logic) else Type.LOGIC
 
         meta = Meta(size, out_type, -1)
@@ -45,15 +45,15 @@ class VerilogEmitter(Emitter):
         if out_type == Type.SIGNED and statement.get_type() not in (Type.SIGNED, Type.ANY):
             statement_str = f"$signed({statement_str})"
 
-        # Assume we only write to logic types
-        if in_process:
-            self.statementString += (
-                self.get_current_indent() + f"{out_str} <= {statement_str};\n"
-            )
+        if in_process or to_reg_str:
+            line = f"{out_str} <= {statement_str};"
         else:
-            self.statementString += (
-                self.get_current_indent() + f"assign {out_str} = {statement_str};\n"
-            )
+            line = f"assign {out_str} = {statement_str};"
+
+        if to_reg_str:
+            self.add_reg_str(line)
+        else:
+            self.statementString += self.get_current_indent() + line + "\n"
 
     def get_definition_str(self, module_name: str, write_regs=True) -> str:
         return (
@@ -245,117 +245,123 @@ class VerilogEmitter(Emitter):
         assert logic.type == "r"
         if init is None:
             init = 0
-        self.increase_indent()
+        self.increase_indent()  # 1→2
         in_else = False
-        if init != None:
+        if init is not None:
             self.add_reg_str(f"if ({self.reset_name})")
-            self.add_reg_str(f"\t{logic.getNameRead()} <= {self.int_to_str(init)};")
+            self.increase_indent()  # 2→3
+            self.add_assignment(logic, Bit(init), to_reg_str=True)
+            self.decrease_indent()  # 3→2
             self.add_reg_str("else begin")
             in_else = True
-            self.increase_indent()
+            self.increase_indent()  # 2→3
 
-        if enable != None:
+        if enable is not None:
             self.add_reg_str(f"if ({enable.getNameRead()})")
-            self.add_reg_str(f"\t{logic.getNameRead()} <= {logic.getNameWrite()};")
+            self.increase_indent()  # →+1
+            self.add_assignment(logic, Val(logic.getNameWrite()), to_reg_str=True)
+            self.decrease_indent()  # ←-1
         else:
-            self.add_reg_str(f"{logic.getNameRead()} <= {logic.getNameWrite()};")
+            self.add_assignment(logic, Val(logic.getNameWrite()), to_reg_str=True)
 
         if in_else:
-            self.decrease_indent()
+            self.decrease_indent()  # 3→2
             self.add_reg_str("end")
-        self.decrease_indent()
+        self.decrease_indent()  # 2→1
 
     def logicvec_reg_init(self, vec: LogicVec, enable=None, init=None) -> None:
         assert vec.type == "r"
         if init is None:
             init = 0
-        self.increase_indent()
+        self.increase_indent()  # 1→2
         in_else = False
-        if init != None:
+        if init is not None:
             self.add_reg_str(f"if ({self.reset_name})")
-            self.add_reg_str(
-                f"\t{vec.getNameRead()} <= {self.int_to_str(init, vec.size)};"
-            )
+            self.increase_indent()  # 2→3
+            self.add_assignment(vec, Val(init), to_reg_str=True)
+            self.decrease_indent()  # 3→2
             self.add_reg_str("else begin")
             in_else = True
-            self.increase_indent()
+            self.increase_indent()  # 2→3
 
-        if enable != None:
+        if enable is not None:
             self.add_reg_str(f"if ({enable.getNameRead()})")
-            self.add_reg_str(f"\t{vec.getNameRead()} <= {vec.getNameWrite()};")
+            self.increase_indent()  # →+1
+            self.add_assignment(vec, Val(vec.getNameWrite()), to_reg_str=True)
+            self.decrease_indent()  # ←-1
         else:
-            self.add_reg_str(f"{vec.getNameRead()} <= {vec.getNameWrite()};")
+            self.add_assignment(vec, Val(vec.getNameWrite()), to_reg_str=True)
 
         if in_else:
-            self.decrease_indent()
+            self.decrease_indent()  # 3→2
             self.add_reg_str("end")
-        self.decrease_indent()
+        self.decrease_indent()  # 2→1
 
     def logicarray_reg_init(self, array: LogicArray, enable=None, init=None) -> None:
         assert array.type == "r"
-        self.increase_indent()
+        self.increase_indent()  # 1→2
         if init is None:
             init = [0] * array.length
         in_else = False
-        if init != None:
+        if init is not None:
             self.add_reg_str(f"if ({self.reset_name}) begin")
-            for i in range(0, array.length):
-                self.add_reg_str(
-                    f"\t{array.getNameRead(i)} <= {self.int_to_str(init[i])};"
-                )
+            self.increase_indent()  # 2→3
+            for i in range(array.length):
+                self.add_assignment((array, i), Bit(init[i]), to_reg_str=True)
+            self.decrease_indent()  # 3→2
             self.add_reg_str("end")
             self.add_reg_str("else begin")
             in_else = True
-            self.increase_indent()
+            self.increase_indent()  # 2→3
 
-        if enable != None:
-            for i in range(0, array.length):
+        if enable is not None:
+            for i in range(array.length):
                 self.add_reg_str(f"if ({enable.getNameRead(i)})")
-                self.add_reg_str(
-                    f"\t{array.getNameRead(i)} <= {array.getNameWrite(i)};"
-                )
+                self.increase_indent()  # →+1
+                self.add_assignment((array, i), Val(array.getNameWrite(i)), to_reg_str=True)
+                self.decrease_indent()  # ←-1
         else:
-            for i in range(0, array.length):
-                self.add_reg_str(f"{array.getNameRead(i)} <= {array.getNameWrite(i)};")
+            for i in range(array.length):
+                self.add_assignment((array, i), Val(array.getNameWrite(i)), to_reg_str=True)
 
         if in_else:
-            self.decrease_indent()
+            self.decrease_indent()  # 3→2
             self.add_reg_str("end")
-        self.decrease_indent()
+        self.decrease_indent()  # 2→1
 
     def logicvecarray_reg_init(
         self, array: LogicVecArray, enable=None, init=None
     ) -> None:
         assert array.type == "r"
-        self.increase_indent()
+        self.increase_indent()  # 1→2
         if init is None:
             init = [0] * array.length
         in_else = False
-        if init != None:
+        if init is not None:
             self.add_reg_str(f"if ({self.reset_name}) begin")
-            for i in range(0, array.length):
-                self.add_reg_str(
-                    f"\t{array.getNameRead(i)} <= {self.int_to_str(init[i], array.size)};"
-                )
+            self.increase_indent()  # 2→3
+            for i in range(array.length):
+                self.add_assignment((array, i), Val(init[i]), to_reg_str=True)
+            self.decrease_indent()  # 3→2
             self.add_reg_str("end")
             self.add_reg_str("else begin")
             in_else = True
-            self.increase_indent()
+            self.increase_indent()  # 2→3
 
-        if enable != None:
-            for i in range(0, array.length):
+        if enable is not None:
+            for i in range(array.length):
                 self.add_reg_str(f"if ({enable.getNameRead(i)})")
-                self.add_reg_str(
-                    f"\t{array.getNameRead(i)} <= {array.getNameWrite(i)};"
-                )
+                self.increase_indent()  # →+1
+                self.add_assignment((array, i), Val(array.getNameWrite(i)), to_reg_str=True)
+                self.decrease_indent()  # ←-1
         else:
-            for i in range(0, array.length):
-                self.add_reg_str(f"{array.getNameRead(i)} <= {array.getNameWrite(i)};")
+            for i in range(array.length):
+                self.add_assignment((array, i), Val(array.getNameWrite(i)), to_reg_str=True)
 
         if in_else:
-            self.decrease_indent()
+            self.decrease_indent()  # 3→2
             self.add_reg_str("end")
-        self.decrease_indent()
+        self.decrease_indent()  # 2→1
 
     def get_file_suffix(self) -> str:
         return "v"
