@@ -42,8 +42,8 @@ class DependencyChecker(Generator):
 
         conflict = Logic(em, "conflict", "w")
         
-        inc_ad = LogicVec(em, "inc_access_disparity", "w", 1)
-        dec_ad = LogicVec(em, "dec_access_disparity", "w", 1)
+        inc_ad = LogicVec(em, "inc_access_disparity", "w", self.configs.access_disparity_width, is_signed=True)
+        dec_ad = LogicVec(em, "dec_access_disparity", "w", self.configs.access_disparity_width, is_signed=True)
         em.add_assignment(inc_ad, Val(1).when(sq_access_en_i).else_(Val(0)))
         em.add_assignment(dec_ad, Val(1).when(pq_done_en_i).else_(Val(0)))
         em.add_assignment(access_disparity, (access_disparity + inc_ad) - dec_ad)
@@ -91,17 +91,22 @@ class DependencyChecker(Generator):
         else:
             ad_as_cmp = access_disparity
 
+
+        corresponding_entry_sent = Logic(em, "corresponding_entry_sent", "w")
+        corresponding_entry_allocated = Logic(em, "corresponding_entry_allocated", "w")
+        em.add_assignment(corresponding_entry_allocated, (pq_length_as_cmp != ad_as_cmp))
+        em.add_assignment(corresponding_entry_sent, access_disparity < Val(0))
+
         em.add_comment("Allow access if:"
-                    "\t- The access disparity has not yet reached the pq_length "
+                    "\t- The access disparity has reached the pq_length "
                     "(i.e. the predecessor has allocated the corresponding entry for this access)\n"
                     "\t- AND, there is either: \n"
                     "       - no conflict  \n"
-                    "       - if the access disparity is negative, the tail has moved past preceding accesses\n"
+                    "       - if the access disparity is negative (i.e. the corresponding entry has been complete)\n"
                     "\t- AND, the access disparity is not maxed out\n"
                     )
-
         max_ad_val = (1 << (self.configs.access_disparity_width - 1)) - 1
         em.add_assignment(allow_sq_access_o,
-            (pq_length_as_cmp != ad_as_cmp) & (~conflict | (access_disparity < Val(0))) & (access_disparity <= Val(max_ad_val)))
+            corresponding_entry_allocated & (~conflict | corresponding_entry_sent) & (access_disparity <= Val(max_ad_val)))
 
         self._write_to_file(em, path_rtl, out_file)
