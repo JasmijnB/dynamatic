@@ -30,7 +30,7 @@
   ],
   "dependencyCheckers": [
     {
-      "AccessDisparityWidth": 4
+      "AccessDisparityWidth": 8
     }
   ]
 }
