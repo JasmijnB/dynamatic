@@ -48,9 +48,9 @@ class DependencyChecker(Generator):
         em.add_assignment(dec_ad, Val(1).when(pq_done_en_i).else_(Val(0)))
         em.add_assignment(access_disparity, (access_disparity + inc_ad) - dec_ad)
 
-        # if the pred port executes sequentially before the succ port, 
-        # initialise the access disparity to 1 (implying the succ already executed once)
-        ad_initial_value = 0 if not self.configs.succ_can_execute_once else 1
+        # if the successor port executes sequentially before the predcessor port, 
+        # initialise the access disparity to -1 (implying the pred already executed once)
+        ad_initial_value = 0 if not self.configs.succ_can_execute_once else -1
         access_disparity.regInit(init=ad_initial_value)
 
         check_mask = LogicVec(em, "check_mask", "w", self.configs.pq.num_entries)
