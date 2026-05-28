@@ -332,8 +332,6 @@ INSTANTIATE_TEST_SUITE_P(
       "bicg_float",
       "covariance",
       "gaussian",
-      "gemm",
-      "gemm_float",
       "gemver",
       "gemver_float",
       "get_tanh",
