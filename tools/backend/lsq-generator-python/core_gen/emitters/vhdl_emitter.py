@@ -455,9 +455,7 @@ class VHDLEmitter(Emitter):
             return str(din)
 
         if meta is not None and meta.type == Type.SIGNED:
-            if din < 0:
-                return f"to_signed({din}, {size})"
-            return str(din)
+            return f"to_signed({din}, {size})"
 
         if size == None:
             if din:
