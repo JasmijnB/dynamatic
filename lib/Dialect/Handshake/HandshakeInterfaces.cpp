@@ -287,10 +287,13 @@ std::string handshake::MemOrderingUnitOp::getOperandName(unsigned idx) {
   if (std::string name = getMemOperandName(lsqPorts, idx); !name.empty())
     return name;
 
-  // Get the operand name from a port to a memory controller
+  // Get the operand name from a port to a memory controller.
+  // Ordering networks expose one MC channel per load port; use indexed names.
   assert(lsqPorts.connectsToMC() && "expected LSQ to connect to MC");
   assert(lsqPorts.getMCPort().getLoadDataInputIndex() == idx &&
          "unknown LSQ/MC operand");
+  if (getOrderingKind() == handshake::MemOrderingKind::OrderingNetwork)
+    return "ldDataFromMC_0";
   return "ldDataFromMC";
 }
 
@@ -305,15 +308,18 @@ std::string handshake::MemOrderingUnitOp::getResultName(unsigned idx) {
   if (std::string name = getMemResultName(lsqPorts, idx); !name.empty())
     return name;
 
-  // Get the operand name from a port to a memory controller
+  // Get the operand name from a port to a memory controller.
+  // Ordering networks expose one MC channel per load/store port; use indexed
+  // names.
   assert(lsqPorts.connectsToMC() && "expected LSQ to connect to MC");
   MCLoadStorePort mcPort = lsqPorts.getMCPort();
+  bool isON = getOrderingKind() == handshake::MemOrderingKind::OrderingNetwork;
   if (mcPort.getLoadAddrOutputIndex() == idx)
-    return "ldAddrToMC";
+    return isON ? "ldAddrToMC_0" : "ldAddrToMC";
   if (mcPort.getStoreAddrOutputIndex() == idx)
-    return "stAddrToMC";
+    return isON ? "stAddrToMC_0" : "stAddrToMC";
   assert(mcPort.getStoreDataOutputIndex() == idx && "unknown LSQ/MC result");
-  return "stDataToMC";
+  return isON ? "stDataToMC_0" : "stDataToMC";
 }
 
 std::string handshake::SharingWrapperOp::getOperandName(unsigned idx) {
