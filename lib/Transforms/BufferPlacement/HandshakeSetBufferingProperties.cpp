@@ -141,7 +141,8 @@ static void setFPGA20Properties(handshake::FuncOp funcOp) {
   // This is a temporary workaround and a better solution is needed.
   for (handshake::StoreOp storeOp : funcOp.getOps<handshake::StoreOp>()) {
     auto memOp = findMemInterface(storeOp.getAddressResult());
-    if (!mlir::isa_and_present<handshake::MemOrderingUnitOp>(memOp))
+    auto lsqOp = dyn_cast_or_null<handshake::MemOrderingUnitOp>(memOp);
+    if (!lsqOp || lsqOp.getOrderingKind() == handshake::MemOrderingKind::OrderingNetwork)
       continue;
 
     for (Value operand : storeOp->getOperands()) {
@@ -156,7 +157,8 @@ static void setFPGA20Properties(handshake::FuncOp funcOp) {
 
   for (handshake::LoadOp loadOp : funcOp.getOps<handshake::LoadOp>()) {
     auto memOp = findMemInterface(loadOp.getAddressResult());
-    if (!mlir::isa_and_present<handshake::MemOrderingUnitOp>(memOp))
+    auto lsqOp = dyn_cast_or_null<handshake::MemOrderingUnitOp>(memOp);
+    if (!lsqOp || lsqOp.getOrderingKind() == handshake::MemOrderingKind::OrderingNetwork)
       continue;
 
     for (Value operand : loadOp->getOperands()) {
@@ -178,6 +180,10 @@ static void setFPGA20Properties(handshake::FuncOp funcOp) {
 
   // Ports of memory interfaces are unbufferizable
   for (auto memOp : funcOp.getOps<handshake::MemoryOpInterface>()) {
+    // Ordering network ports are bufferizable — treat like regular handshake ops
+    if (auto lsqOp = dyn_cast<handshake::MemOrderingUnitOp>(memOp.getOperation()))
+      if (lsqOp.getOrderingKind() == handshake::MemOrderingKind::OrderingNetwork)
+        continue;
     FuncMemoryPorts ports = getMemoryPorts(memOp);
     for (size_t i = 0, e = ports.getNumGroups(); i < e; ++i) {
       for (Value inputVal : ports.getGroupInputs(i))
@@ -194,8 +200,11 @@ static void setFPGA20Properties(handshake::FuncOp funcOp) {
   // See docs/Specs/Buffering.md
   // Control paths to LSQs have specific properties
   for (handshake::MemOrderingUnitOp lsqOp :
-       funcOp.getOps<handshake::MemOrderingUnitOp>())
+       funcOp.getOps<handshake::MemOrderingUnitOp>()) {
+    if (lsqOp.getOrderingKind() == handshake::MemOrderingKind::OrderingNetwork)
+      continue;
     setLSQControlConstraints(lsqOp);
+  }
 }
 
 namespace {

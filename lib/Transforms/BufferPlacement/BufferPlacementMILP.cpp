@@ -466,8 +466,9 @@ void BufferPlacementMILP::addSteadyStateReachabilityConstraints(CFDFC &cfdfc) {
     /// whether the StoreOp is connected to the LSQ or not.
     if (auto storeOp = dyn_cast<handshake::StoreOp>(dstOp)) {
       auto memOp = findMemInterface(storeOp.getAddressResult());
-      if (isa<handshake::MemOrderingUnitOp>(memOp))
-        continue;
+      if (auto lsqOp = dyn_cast_or_null<handshake::MemOrderingUnitOp>(memOp))
+        if (lsqOp.getOrderingKind() != handshake::MemOrderingKind::OrderingNetwork)
+          continue;
     }
 
     /// TODO: The legacy implementation does not add any constraints here for
