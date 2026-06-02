@@ -141,8 +141,9 @@ static void setFPGA20Properties(handshake::FuncOp funcOp) {
   // This is a temporary workaround and a better solution is needed.
   for (handshake::StoreOp storeOp : funcOp.getOps<handshake::StoreOp>()) {
     auto memOp = findMemInterface(storeOp.getAddressResult());
-    auto lsqOp = dyn_cast_or_null<handshake::MemOrderingUnitOp>(memOp);
-    if (!lsqOp || lsqOp.getOrderingKind() == handshake::MemOrderingKind::OrderingNetwork)
+    if (!isa_and_present<handshake::MemOrderingUnitOp>(memOp) ||
+        cast<handshake::MemOrderingUnitOp>(memOp).getOrderingKind() ==
+            handshake::MemOrderingKind::OrderingNetwork)
       continue;
 
     for (Value operand : storeOp->getOperands()) {
@@ -157,8 +158,9 @@ static void setFPGA20Properties(handshake::FuncOp funcOp) {
 
   for (handshake::LoadOp loadOp : funcOp.getOps<handshake::LoadOp>()) {
     auto memOp = findMemInterface(loadOp.getAddressResult());
-    auto lsqOp = dyn_cast_or_null<handshake::MemOrderingUnitOp>(memOp);
-    if (!lsqOp || lsqOp.getOrderingKind() == handshake::MemOrderingKind::OrderingNetwork)
+    if (!isa_and_present<handshake::MemOrderingUnitOp>(memOp) ||
+        cast<handshake::MemOrderingUnitOp>(memOp).getOrderingKind() ==
+            handshake::MemOrderingKind::OrderingNetwork)
       continue;
 
     for (Value operand : loadOp->getOperands()) {
