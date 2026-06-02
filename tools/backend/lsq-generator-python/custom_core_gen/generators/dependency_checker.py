@@ -38,7 +38,8 @@ class DependencyChecker(Generator):
         # TODO: Only allow predecessor access when the access disparity bit cannot overflow
         em.add_assignment(allow_pq_access_o, Bit(1)) 
 
-        access_disparity = LogicVec(em, "access_disparity", "r", self.configs.access_disparity_width, is_signed=True)
+        ad_width = self.configs.access_disparity_width
+        access_disparity = LogicVec(em, "access_disparity", "r", ad_width, is_signed=True)
 
         conflict = Logic(em, "conflict", "w")
         
@@ -57,7 +58,7 @@ class DependencyChecker(Generator):
         ones = LogicVec(em, "ones", "w", self.configs.pq.num_entries)
         # generate access_disparity 1's for the check mask
         for i in range(self.configs.pq.num_entries):
-            em.add_assignment((ones, i), Bit(1).when(Val(i) <= access_disparity).else_(Bit(0)))
+            em.add_assignment((ones, i), Bit(1).when(Val(i, size=ad_width) <= access_disparity).else_(Bit(0)))
         CyclicRightShift(em, check_mask, ones, pq_done_i)
 
         tail_address = LogicVec(em, "tail_address", "w", self.configs.sq.addr_width)
@@ -95,7 +96,7 @@ class DependencyChecker(Generator):
         corresponding_entry_sent = Logic(em, "corresponding_entry_sent", "w")
         corresponding_entry_allocated = Logic(em, "corresponding_entry_allocated", "w")
         em.add_assignment(corresponding_entry_allocated, (pq_length_as_cmp != ad_as_cmp))
-        em.add_assignment(corresponding_entry_sent, access_disparity < Val(0))
+        em.add_assignment(corresponding_entry_sent, access_disparity < Val(0, size=ad_width))
 
         em.add_comment("Allow access if:"
                     "\t- The access disparity has reached the pq_length "
@@ -107,6 +108,6 @@ class DependencyChecker(Generator):
                     )
         max_ad_val = (1 << (self.configs.access_disparity_width - 1)) - 1
         em.add_assignment(allow_sq_access_o,
-            corresponding_entry_allocated & (~conflict | corresponding_entry_sent) & (access_disparity <= Val(max_ad_val)))
+            corresponding_entry_allocated & (~conflict | corresponding_entry_sent) & (access_disparity <= Val(max_ad_val, size=ad_width)))
 
         self._write_to_file(em, path_rtl, out_file)
