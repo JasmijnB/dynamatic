@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core_gen.signals import Logic, LogicVec, LogicArray, LogicVecArray
 from core_gen.emitters import Emitter, VerilogEmitter, VHDLEmitter
-from core_gen.ir import Val, Bit, CustomStatement
+from core_gen.ir import Bit, CustomStatement
 from custom_core_gen.configs import OrderingNetworkConfig
 from custom_core_gen.generators.structure import Structure
 
@@ -114,14 +114,9 @@ class OrderingNetworkWrapper:
         io_stDataToMC_ready = LogicArray   (em, "io_stDataToMC_ready", "i", self.numStores,             dyn_comp=True)
 
         # ---- Per-load internal signals ----
-        io_loadEn   = [Logic   (em, f"io_loadEn_{i}",  "w")                        for i in range(self.numLoads)]
-        wreq_ready  = [Logic   (em, f"wreq_ready_{i}", "w")                        for i in range(self.numStores)]
-        rresp_id    = [LogicVec(em, f"rresp_id_{i}",   "w", self.idW, force_reg=True) for i in range(self.numLoads)]
-        wresp_valid = [Logic   (em, f"wresp_valid_{i}", "w", force_reg=True)       for i in range(self.numStores)]
-        wresp_id    = [LogicVec(em, f"wresp_id_{i}",   "w", self.idW, force_reg=True) for i in range(self.numStores)]
-        rreq_id     = [LogicVec(em, f"rreq_id_{i}",    "w", self.idW)             for i in range(self.numLoads)]
-        wreq_id     = [LogicVec(em, f"wreq_id_{i}",    "w", self.idW)             for i in range(self.numStores)]
-        io_storeEn  = [Logic   (em, f"io_storeEn_{i}", "w")                        for i in range(self.numStores)]
+        io_loadEn   = [Logic(em, f"io_loadEn_{i}",  "w")                  for i in range(self.numLoads)]
+        wresp_valid = [Logic(em, f"wresp_valid_{i}", "w", force_reg=True) for i in range(self.numStores)]
+        io_storeEn  = [Logic(em, f"io_storeEn_{i}", "w")                  for i in range(self.numStores)]
         mem_data_valid_st = [Logic(em, f"mem_data_valid_st_{i}", "w")              for i in range(self.numStores)]
 
         empty_ld = [Logic(em, f"empty_ld_{i}", "w") for i in range(self.numLoads)]
@@ -131,49 +126,23 @@ class OrderingNetworkWrapper:
         for i in range(self.numGroups):
             em.add_assignment(io_ctrl_ready[i], Bit(1))
 
-        # ---- Per-load register processes ----
-        for i in range(self.numLoads):
-            em.add_comment(f"Process for rresp_id_{i}")
-            em.add_statement(em.get_reg_init_str())
-            em.increase_indent()
-            em.add_custom_statement(CustomStatement("if rst = '1' then", "if (rst) begin"))
-            em.increase_indent()
-            em.add_assignment(rresp_id[i], Val(0), in_process=True)
-            em.decrease_indent()
-            em.add_custom_statement(CustomStatement("elsif rising_edge(clk) then", "end\nelse begin"))
-            em.increase_indent()
-            em.add_custom_statement(CustomStatement(
-                f"if {io_loadEn[i].getNameRead()} = '1' then",
-                f"if ({io_loadEn[i].getNameRead()}) begin",
-            ))
-            em.increase_indent()
-            em.add_assignment(rresp_id[i], rreq_id[i], in_process=True)
-            em.decrease_indent()
-            em.add_custom_statement(CustomStatement("end if;", "end"))
-            em.decrease_indent()
-            em.add_custom_statement(CustomStatement("end if;", "end"))
-            em.decrease_indent()
-            em.add_custom_statement(CustomStatement("end process;", "end"))
-
         # ---- Per-store register processes ----
         for i in range(self.numStores):
-            em.add_comment(f"Process for wresp_valid_{i} and wresp_id_{i}")
+            em.add_comment(f"Process for wresp_valid_{i}")
             em.add_statement(em.get_reg_init_str())
             em.increase_indent()
             em.add_custom_statement(CustomStatement("if rst = '1' then", "if (rst) begin"))
             em.increase_indent()
             em.add_assignment(wresp_valid[i], Bit(0), in_process=True)
-            em.add_assignment(wresp_id[i],    Val(0), in_process=True)
             em.decrease_indent()
             em.add_custom_statement(CustomStatement("elsif rising_edge(clk) then", "end\nelse begin"))
             em.increase_indent()
             em.add_custom_statement(CustomStatement(
-                f"if {io_storeEn[i].getNameRead()} = '1' and {wreq_ready[i].getNameRead()} = '1' then",
-                f"if ({io_storeEn[i].getNameRead()} && {wreq_ready[i].getNameRead()}) begin",
+                f"if {io_storeEn[i].getNameRead()} = '1' and {io_stAddrToMC_ready[i].getNameRead()} = '1' then",
+                f"if ({io_storeEn[i].getNameRead()} && {io_stAddrToMC_ready[i].getNameRead()}) begin",
             ))
             em.increase_indent()
-            em.add_assignment(wresp_valid[i], Bit(1),       in_process=True)
-            em.add_assignment(wresp_id[i],    wreq_id[i],   in_process=True)
+            em.add_assignment(wresp_valid[i], Bit(1), in_process=True)
             em.decrease_indent()
             em.add_custom_statement(CustomStatement("else", "end\nelse begin"))
             em.increase_indent()
@@ -192,7 +161,6 @@ class OrderingNetworkWrapper:
         for i in range(self.numStores):
             em.add_assignment(io_stAddrToMC_valid[i], io_storeEn[i])
             em.add_assignment(io_stDataToMC_valid[i], mem_data_valid_st[i])
-            em.add_assignment(wreq_ready[i], io_stAddrToMC_ready[i] & io_stDataToMC_ready[i])
 
         # ---- Instantiate structure module ----
         em.add_comment("Instantiate the ordering network structure")
@@ -233,8 +201,8 @@ class OrderingNetworkWrapper:
                 em.add_map(self._sp("mem_addr_o",       q_idx, i, "_o"), io_stAddrToMC_bits[i].getNameWrite())
                 em.add_map(self._sp("mem_addr_valid_o", q_idx, i, "_o"), io_storeEn        [i].getNameRead())
                 em.add_map(self._sp("mem_data_o",       q_idx, i, "_o"), io_stDataToMC_bits[i].getNameWrite())
-                em.add_map(self._sp("mem_addr_ready_i", q_idx, i, "_i"), wreq_ready        [i].getNameRead())
-                em.add_map(self._sp("mem_data_ready_i", q_idx, i, "_i"), wreq_ready        [i].getNameRead())
+                em.add_map(self._sp("mem_addr_ready_i", q_idx, i, "_i"), io_stAddrToMC_ready[i].getNameRead())
+                em.add_map(self._sp("mem_data_ready_i", q_idx, i, "_i"), io_stDataToMC_ready[i].getNameRead())
                 em.add_map(self._sp("mem_data_valid_o", q_idx, i, "_o"), mem_data_valid_st[i].getNameWrite())
                 em.add_map(self._sp("mem_exec_valid_i", q_idx, i, "_i"), wresp_valid[i].getNameRead())
                 em.add_map(self._sp("mem_exec_ready_o", q_idx, i, "_o"))
