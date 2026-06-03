@@ -74,8 +74,12 @@ class Queue(Generator):
         em.add_assignment(load_en, ~q_empty & allow_access_i)
 
         # Issue
-        can_issue = self._setup_can_issue(
-            em, q_issue, q_head, q_full_w_issue, load_en, issue_en, mem_addr_ready_i)
+        can_issue = Logic(em, "can_issue", "w")
+
+        em.add_assignment(can_issue,
+            ((q_issue == q_head) & load_en) | (q_issue != q_head) | q_full_w_issue)
+        em.add_assignment(issue_en, can_issue & mem_addr_ready_i)
+
         em.add_assignment(mem_addr_valid_o, can_issue)
 
         MuxLookUp(em, mem_addr_o, q_addr, q_issue_sel)
@@ -196,17 +200,6 @@ class Queue(Generator):
                 q_full, q_empty, q_full_w_issue,
                 q_issue_sel)
 
-    def _setup_can_issue(self, em: Emitter, q_issue, q_head, q_full_w_issue,
-                         load_en, issue_en, axi_ready_i):
-        """
-        Assign the shared issue-readiness logic and connect issue_en.
-        Returns can_issue.
-        """
-        can_issue = Logic(em, "can_issue", "w")
-        em.add_assignment(can_issue,
-            ((q_issue == q_head) & load_en) | (q_issue != q_head) | q_full_w_issue)
-        em.add_assignment(issue_en, can_issue & axi_ready_i)
-        return can_issue
 
     def _generate_observable_ports(self, em: Emitter, q_addr,
                                     q_done, q_tail, q_head,
