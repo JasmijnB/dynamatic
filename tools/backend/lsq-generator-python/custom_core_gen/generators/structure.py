@@ -12,19 +12,20 @@ from copy import copy
 from collections import defaultdict
 
 DC_TO_PQ_MAP = {
-    "pq_addr_i":    "q_addr_o",
-    "pq_done_i":    "done_ptr_o",
+    "pq_addr_i": "q_addr_o",
+    "pq_done_i": "done_ptr_o",
     "pq_done_en_i": "done_en_o",
-    "pq_length_i":  "length_o",
-    "allow_pq_access_o" : "allow_access_i",
+    "pq_length_i": "length_o",
+    "allow_pq_access_o": "allow_access_i",
 }
 
 
 DC_TO_SQ_MAP = {
-    "sq_head_i":         "queue_head_o",
-    "sq_access_en_i":    "access_en_o",
+    "sq_head_i": "queue_head_o",
+    "sq_access_en_i": "access_en_o",
     "allow_sq_access_o": "allow_access_i",
 }
+
 
 def get_global_queue_ports(queue_def):
     dc_ports = set(DC_TO_SQ_MAP.values()) | set(DC_TO_PQ_MAP.values())
@@ -43,18 +44,19 @@ def make_connecting_signal(signal, em, appended_name=""):
 
     return c_signal
 
-class QueueInstance(): 
+
+class QueueInstance:
     def __init__(self, q_def, num: int, q_type: str):
         self.q_def = q_def
         self.num = num
         self.q_type = q_type
         self.port_vars = defaultdict(list)
         self.successors = []
-        
+
     def init_port_vars(self, universal_vars):
-        for (port, signal) in universal_vars.items():
+        for port, signal in universal_vars.items():
             self.port_vars[port] = [signal[self.num]]
-            
+
     def instantiate(self, em, defaults):
         # transform port_vars
         port_signals = {}
@@ -63,11 +65,13 @@ class QueueInstance():
         for port_name in defaults:
             if port_name not in self.port_vars or len(self.port_vars[port_name]) == 0:
                 port_signals[port_name] = defaults[port_name]
-                
+
         for port_name, signal_list in self.port_vars.items():
             # if no signals are connected, connect to the defaults if it exists
             if len(signal_list) == 0:
-                    raise Exception(f"No signal mapped to port {port_name} of queue {self.num} and no default provided")
+                raise Exception(
+                    f"No signal mapped to port {port_name} of queue {self.num} and no default provided"
+                )
             elif len(signal_list) == 1:
                 out = signal_list[0]
             else:
@@ -76,11 +80,11 @@ class QueueInstance():
                 em.add_assignment(out, reduce_bin(BinOp.AND, signal_list))
 
             port_signals[port_name] = out
-                
-        self.q_def.instantiate(em, port_signals, f"queue_{self.num}_{self.q_type}")
-            
 
-class DependencyCheckerInstance():
+        self.q_def.instantiate(em, port_signals, f"queue_{self.num}_{self.q_type}")
+
+
+class DependencyCheckerInstance:
     def __init__(self, dp_def, pred: QueueInstance, succ: QueueInstance):
         self.pred = pred
         self.succ = succ
@@ -105,17 +109,19 @@ class DependencyCheckerInstance():
 
         for port_name in DC_TO_SQ_MAP.keys():
             self.connect_ports(port_name, DC_TO_SQ_MAP, self.succ, em)
-            
+
     def instantate(self, em):
-        self.dp_def.instantiate(em, self.port_vars, f"dp_q{self.pred.num}_q{self.succ.num}")
-            
+        self.dp_def.instantiate(
+            em, self.port_vars, f"dp_q{self.pred.num}_q{self.succ.num}"
+        )
+
 
 class Structure(Generator):
     def __init__(self, name: str, suffix: str, configs):
         self.name = name
         self.module_name = name + suffix
         self.configs = configs
-        
+
     def generate_from_json(self, em, config: OrderingNetworkConfig, out_path):
         out_file = f"{out_path}/{self.name}.{em.get_file_suffix()}"
 
@@ -135,7 +141,9 @@ class Structure(Generator):
 
         # One DependencyChecker def per unique (src_queue_idx, dst_queue_idx) pair
         dc_def_map = {}
-        for edge_idx, (src_port, dst_port) in enumerate(zip(config.edge_src, config.edge_dst)):
+        for edge_idx, (src_port, dst_port) in enumerate(
+            zip(config.edge_src, config.edge_dst)
+        ):
             src_queue_idx = config.ports_to_queue[src_port]
             dst_queue_idx = config.ports_to_queue[dst_port]
             key = (src_queue_idx, dst_queue_idx)
@@ -160,11 +168,21 @@ class Structure(Generator):
         pq_keys, pq_vals = set(DC_TO_PQ_MAP.keys()), set(DC_TO_PQ_MAP.values())
         sq_keys, sq_vals = set(DC_TO_SQ_MAP.keys()), set(DC_TO_SQ_MAP.values())
 
-        assert pq_keys <= dc_ports,  f"DC_TO_PQ_MAP keys not in DC ports:      {pq_keys - dc_ports}"
-        assert pq_vals <= pq_ports,  f"DC_TO_PQ_MAP values not in pred ports:  {pq_vals - pq_ports}"
-        assert sq_keys <= dc_ports,  f"DC_TO_SQ_MAP keys not in DC ports:      {sq_keys - dc_ports}"
-        assert sq_vals <= sq_ports,  f"DC_TO_SQ_MAP values not in succ ports:  {sq_vals - sq_ports}"
-        assert (pq_keys | sq_keys) == dc_ports, f"DC ports not fully mapped: {dc_ports - (pq_keys | sq_keys)}"
+        assert (
+            pq_keys <= dc_ports
+        ), f"DC_TO_PQ_MAP keys not in DC ports:      {pq_keys - dc_ports}"
+        assert (
+            pq_vals <= pq_ports
+        ), f"DC_TO_PQ_MAP values not in pred ports:  {pq_vals - pq_ports}"
+        assert (
+            sq_keys <= dc_ports
+        ), f"DC_TO_SQ_MAP keys not in DC ports:      {sq_keys - dc_ports}"
+        assert (
+            sq_vals <= sq_ports
+        ), f"DC_TO_SQ_MAP values not in succ ports:  {sq_vals - sq_ports}"
+        assert (
+            pq_keys | sq_keys
+        ) == dc_ports, f"DC ports not fully mapped: {dc_ports - (pq_keys | sq_keys)}"
 
         # Count ports per queue config
         group_sizes = defaultdict(int)
@@ -187,11 +205,21 @@ class Structure(Generator):
             for port in global_q_ports:
                 signal = q_port_map[port]
                 if type(signal) == LogicVec:
-                    universal_vars[queue_config_idx][port] = LogicVecArray(em, f"{port}_q{queue_config_idx}_array", signal.type, group_size, signal.size)
+                    universal_vars[queue_config_idx][port] = LogicVecArray(
+                        em,
+                        f"{port}_q{queue_config_idx}_array",
+                        signal.type,
+                        group_size,
+                        signal.size,
+                    )
                 elif type(signal) == Logic:
-                    universal_vars[queue_config_idx][port] = LogicArray(em, f"{port}_q{queue_config_idx}_array", signal.type, group_size)
+                    universal_vars[queue_config_idx][port] = LogicArray(
+                        em, f"{port}_q{queue_config_idx}_array", signal.type, group_size
+                    )
                 else:
-                    raise Exception(f"Unsupported signal type {type(signal)} for port {port}")
+                    raise Exception(
+                        f"Unsupported signal type {type(signal)} for port {port}"
+                    )
 
         # Create one QueueInstance per port
         queue_instances = {}
@@ -200,13 +228,17 @@ class Structure(Generator):
             queue_type = config.queues[queue_config_idx].q_type
             within_group_idx = group_counters[queue_config_idx]
             group_counters[queue_config_idx] += 1
-            q_instance = QueueInstance(queue_defs[port_idx], within_group_idx, queue_type)
+            q_instance = QueueInstance(
+                queue_defs[port_idx], within_group_idx, queue_type
+            )
             q_instance.init_port_vars(universal_vars[queue_config_idx])
             queue_instances[port_idx] = q_instance
 
         # Create DependencyCheckerInstances
         dp_checkers = []
-        for edge_idx, (src_port, dst_port) in enumerate(zip(config.edge_src, config.edge_dst)):
+        for edge_idx, (src_port, dst_port) in enumerate(
+            zip(config.edge_src, config.edge_dst)
+        ):
             src_queue_idx = config.ports_to_queue[src_port]
             dst_queue_idx = config.ports_to_queue[dst_port]
             key = (src_queue_idx, dst_queue_idx)

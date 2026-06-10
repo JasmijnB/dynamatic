@@ -289,7 +289,6 @@ class Queue(Generator):
             )
             em.add_assignment(queue_head_o, queue_head_w)
 
-
     def _write_to_file(self, em: Emitter, path_rtl: str, out_file: str = None):
         output_str = em.get_definition_str(self.module_name)
         path = (

@@ -20,6 +20,8 @@ config = DependencyCheckerConfig.from_parts(raw, pq, sq)
 
 verilog_em = VerilogEmitter()
 vhdl_em = VHDLEmitter()
-dependency_checker = DependencyChecker(name="dependency_checker", suffix="", configs=config)
+dependency_checker = DependencyChecker(
+    name="dependency_checker", suffix="", configs=config
+)
 dependency_checker.generate(em=verilog_em, path_rtl=directory / "out")
 dependency_checker.generate(em=vhdl_em, path_rtl=directory / "out")

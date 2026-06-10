@@ -12,7 +12,8 @@ LSQ_ROOT = TESTBENCHES_DIR.parent.parent
 
 def _testbench_dirs():
     return sorted(
-        d for d in TESTBENCHES_DIR.iterdir()
+        d
+        for d in TESTBENCHES_DIR.iterdir()
         if d.is_dir() and (d / "generate.py").exists()
     )
 
@@ -39,9 +40,9 @@ def test_generate(testbench):
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0, (
-        f"generate.py failed for {testbench.name}:\n{result.stderr}"
-    )
+    assert (
+        result.returncode == 0
+    ), f"generate.py failed for {testbench.name}:\n{result.stderr}"
 
 
 @pytest.mark.skipif(not _has_tool("vsim"), reason="ModelSim/Questa not available")
@@ -58,27 +59,36 @@ def test_simulate(testbench):
     env = {**os.environ, "PYTHONPATH": str(LSQ_ROOT)}
 
     if (out_dir / "work").is_dir():
-        subprocess.run(["vdel", "-all", "-lib", "work"], cwd=out_dir, env=env, check=True)
+        subprocess.run(
+            ["vdel", "-all", "-lib", "work"], cwd=out_dir, env=env, check=True
+        )
 
     subprocess.run(["vlib", "work"], cwd=out_dir, env=env, check=True)
 
     subprocess.run(
         ["vlog", "-sv", str(tb_sv)],
-        cwd=out_dir, env=env, check=True,
+        cwd=out_dir,
+        env=env,
+        check=True,
     )
     rtl_files = sorted(out_dir.glob("*.v"))
     subprocess.run(
         ["vlog"] + [f.name for f in rtl_files],
-        cwd=out_dir, env=env, check=True,
+        cwd=out_dir,
+        env=env,
+        check=True,
     )
 
     result = subprocess.run(
         [
-            "vsim", "-c",
-            "-wlf", "output.wlf",
+            "vsim",
+            "-c",
+            "-wlf",
+            "output.wlf",
             "-voptargs=+acc",
             f"{name}_tb",
-            "-do", "log -r /*; run -all; quit",
+            "-do",
+            "log -r /*; run -all; quit",
         ],
         cwd=out_dir,
         env=env,
@@ -86,10 +96,12 @@ def test_simulate(testbench):
         text=True,
     )
     output = result.stdout + result.stderr
-    failures = [line for line in output.splitlines() if "FAIL" in line or "TIMEOUT" in line]
-    assert result.returncode == 0 and not failures, (
-        f"Simulation failed for {name}:\n" + ("\n".join(failures) or output)
-    )
+    failures = [
+        line for line in output.splitlines() if "FAIL" in line or "TIMEOUT" in line
+    ]
+    assert (
+        result.returncode == 0 and not failures
+    ), f"Simulation failed for {name}:\n" + ("\n".join(failures) or output)
 
 
 @pytest.mark.skipif(not _has_tool("vsim"), reason="ModelSim/Questa not available")
@@ -106,27 +118,36 @@ def test_simulate_vhdl(testbench):
     env = {**os.environ, "PYTHONPATH": str(LSQ_ROOT)}
 
     if (out_dir / "work").is_dir():
-        subprocess.run(["vdel", "-all", "-lib", "work"], cwd=out_dir, env=env, check=True)
+        subprocess.run(
+            ["vdel", "-all", "-lib", "work"], cwd=out_dir, env=env, check=True
+        )
 
     subprocess.run(["vlib", "work"], cwd=out_dir, env=env, check=True)
 
     vhd_files = sorted(out_dir.glob("*.vhd"))
     subprocess.run(
         ["vcom", "-2008", "-explicit", "-vopt"] + [f.name for f in vhd_files],
-        cwd=out_dir, env=env, check=True,
+        cwd=out_dir,
+        env=env,
+        check=True,
     )
     subprocess.run(
         ["vlog", "-sv", str(tb_sv)],
-        cwd=out_dir, env=env, check=True,
+        cwd=out_dir,
+        env=env,
+        check=True,
     )
 
     result = subprocess.run(
         [
-            "vsim", "-c",
-            "-wlf", "output_vhdl.wlf",
+            "vsim",
+            "-c",
+            "-wlf",
+            "output_vhdl.wlf",
             "-voptargs=+acc",
             f"{name}_tb",
-            "-do", "log -r /*; run -all; quit",
+            "-do",
+            "log -r /*; run -all; quit",
         ],
         cwd=out_dir,
         env=env,
@@ -134,7 +155,9 @@ def test_simulate_vhdl(testbench):
         text=True,
     )
     output = result.stdout + result.stderr
-    failures = [line for line in output.splitlines() if "FAIL" in line or "TIMEOUT" in line]
-    assert result.returncode == 0 and not failures, (
-        f"VHDL simulation failed for {name}:\n" + ("\n".join(failures) or output)
-    )
+    failures = [
+        line for line in output.splitlines() if "FAIL" in line or "TIMEOUT" in line
+    ]
+    assert (
+        result.returncode == 0 and not failures
+    ), f"VHDL simulation failed for {name}:\n" + ("\n".join(failures) or output)

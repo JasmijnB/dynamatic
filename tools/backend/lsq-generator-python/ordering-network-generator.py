@@ -43,19 +43,33 @@ class OrderingNetworkWrapper:
         # Assume all queues share the same data/addr/id widths
         self.dataW = config.queues[0].data_width
         self.addrW = config.queues[0].addr_width
-        self.idW   = config.queues[0].id_width
+        self.idW = config.queues[0].id_width
 
         # Find the queue config index for load and store
-        self.ld_q_idx = next(i for i, q in enumerate(config.queues) if q.q_type == "load")
-        self.st_q_idx = next(i for i, q in enumerate(config.queues) if q.q_type == "store")
+        self.ld_q_idx = next(
+            i for i, q in enumerate(config.queues) if q.q_type == "load"
+        )
+        self.st_q_idx = next(
+            i for i, q in enumerate(config.queues) if q.q_type == "store"
+        )
 
         # Count ports of each type and groups
-        self.numLoads  = sum(1 for p in config.ports_to_queue if config.queues[p].q_type == "load")
-        self.numStores = sum(1 for p in config.ports_to_queue if config.queues[p].q_type == "store")
+        self.numLoads = sum(
+            1 for p in config.ports_to_queue if config.queues[p].q_type == "load"
+        )
+        self.numStores = sum(
+            1 for p in config.ports_to_queue if config.queues[p].q_type == "store"
+        )
         self.numGroups = len(set(config.port_bb_ids))
-        assert self.numGroups == 1, "The ordering network only supports a single group for now"
-        assert self.numLoads == 1, "The ordering network only supports a single load port for now"
-        assert self.numStores == 1, "The ordering network only supports a single store port for now"
+        assert (
+            self.numGroups == 1
+        ), "The ordering network only supports a single group for now"
+        assert (
+            self.numLoads == 1
+        ), "The ordering network only supports a single load port for now"
+        assert (
+            self.numStores == 1
+        ), "The ordering network only supports a single store port for now"
 
     # ------------------------------------------------------------------
     # Helper: build the mangled structure-module port name
@@ -77,47 +91,102 @@ class OrderingNetworkWrapper:
         em.reset_name = "rst"
 
         # ---- Group control IOs (always-accept) ----
-        io_ctrl_ready = LogicArray(em, "io_ctrl_ready", "o", self.numGroups, dyn_comp=True)
+        io_ctrl_ready = LogicArray(
+            em, "io_ctrl_ready", "o", self.numGroups, dyn_comp=True
+        )
         LogicArray(em, "io_ctrl_valid", "i", self.numGroups, dyn_comp=True)
 
         # ---- Per-load circuit-facing IOs ----
-        io_ldAddr_ready = LogicArray   (em, "io_ldAddr_ready", "o", self.numLoads,             dyn_comp=True)
-        io_ldAddr_valid = LogicArray   (em, "io_ldAddr_valid", "i", self.numLoads,             dyn_comp=True)
-        io_ldAddr_bits  = LogicVecArray(em, "io_ldAddr_bits",  "i", self.numLoads, self.addrW, dyn_comp=True)
-        io_ldData_ready = LogicArray   (em, "io_ldData_ready", "i", self.numLoads,             dyn_comp=True)
-        io_ldData_valid = LogicArray   (em, "io_ldData_valid", "o", self.numLoads,             dyn_comp=True)
-        io_ldData_bits  = LogicVecArray(em, "io_ldData_bits",  "o", self.numLoads, self.dataW, dyn_comp=True)
+        io_ldAddr_ready = LogicArray(
+            em, "io_ldAddr_ready", "o", self.numLoads, dyn_comp=True
+        )
+        io_ldAddr_valid = LogicArray(
+            em, "io_ldAddr_valid", "i", self.numLoads, dyn_comp=True
+        )
+        io_ldAddr_bits = LogicVecArray(
+            em, "io_ldAddr_bits", "i", self.numLoads, self.addrW, dyn_comp=True
+        )
+        io_ldData_ready = LogicArray(
+            em, "io_ldData_ready", "i", self.numLoads, dyn_comp=True
+        )
+        io_ldData_valid = LogicArray(
+            em, "io_ldData_valid", "o", self.numLoads, dyn_comp=True
+        )
+        io_ldData_bits = LogicVecArray(
+            em, "io_ldData_bits", "o", self.numLoads, self.dataW, dyn_comp=True
+        )
 
         # ---- Per-store circuit-facing IOs ----
-        io_stAddr_ready = LogicArray   (em, "io_stAddr_ready", "o", self.numStores,             dyn_comp=True)
-        io_stAddr_valid = LogicArray   (em, "io_stAddr_valid", "i", self.numStores,             dyn_comp=True)
-        io_stAddr_bits  = LogicVecArray(em, "io_stAddr_bits",  "i", self.numStores, self.addrW, dyn_comp=True)
-        io_stData_ready = LogicArray   (em, "io_stData_ready", "o", self.numStores,             dyn_comp=True)
-        io_stData_valid = LogicArray   (em, "io_stData_valid", "i", self.numStores,             dyn_comp=True)
-        io_stData_bits  = LogicVecArray(em, "io_stData_bits",  "i", self.numStores, self.dataW, dyn_comp=True)
+        io_stAddr_ready = LogicArray(
+            em, "io_stAddr_ready", "o", self.numStores, dyn_comp=True
+        )
+        io_stAddr_valid = LogicArray(
+            em, "io_stAddr_valid", "i", self.numStores, dyn_comp=True
+        )
+        io_stAddr_bits = LogicVecArray(
+            em, "io_stAddr_bits", "i", self.numStores, self.addrW, dyn_comp=True
+        )
+        io_stData_ready = LogicArray(
+            em, "io_stData_ready", "o", self.numStores, dyn_comp=True
+        )
+        io_stData_valid = LogicArray(
+            em, "io_stData_valid", "i", self.numStores, dyn_comp=True
+        )
+        io_stData_bits = LogicVecArray(
+            em, "io_stData_bits", "i", self.numStores, self.dataW, dyn_comp=True
+        )
 
         # ---- Per-load MC-facing IOs ----
         # Named io_ldAddrToMC_N_bits etc. (dyn_comp inserts the index before last token)
-        io_ldAddrToMC_bits    = LogicVecArray(em, "io_ldAddrToMC_bits",    "o", self.numLoads, self.addrW, dyn_comp=True)
-        io_ldAddrToMC_valid   = LogicArray   (em, "io_ldAddrToMC_valid",   "o", self.numLoads,             dyn_comp=True)
-        io_ldAddrToMC_ready   = LogicArray   (em, "io_ldAddrToMC_ready",   "i", self.numLoads,             dyn_comp=True)
-        io_ldDataFromMC_bits  = LogicVecArray(em, "io_ldDataFromMC_bits",  "i", self.numLoads, self.dataW, dyn_comp=True)
-        io_ldDataFromMC_valid = LogicArray   (em, "io_ldDataFromMC_valid", "i", self.numLoads,             dyn_comp=True)
-        io_ldDataFromMC_ready = LogicArray   (em, "io_ldDataFromMC_ready", "o", self.numLoads,             dyn_comp=True)
+        io_ldAddrToMC_bits = LogicVecArray(
+            em, "io_ldAddrToMC_bits", "o", self.numLoads, self.addrW, dyn_comp=True
+        )
+        io_ldAddrToMC_valid = LogicArray(
+            em, "io_ldAddrToMC_valid", "o", self.numLoads, dyn_comp=True
+        )
+        io_ldAddrToMC_ready = LogicArray(
+            em, "io_ldAddrToMC_ready", "i", self.numLoads, dyn_comp=True
+        )
+        io_ldDataFromMC_bits = LogicVecArray(
+            em, "io_ldDataFromMC_bits", "i", self.numLoads, self.dataW, dyn_comp=True
+        )
+        io_ldDataFromMC_valid = LogicArray(
+            em, "io_ldDataFromMC_valid", "i", self.numLoads, dyn_comp=True
+        )
+        io_ldDataFromMC_ready = LogicArray(
+            em, "io_ldDataFromMC_ready", "o", self.numLoads, dyn_comp=True
+        )
 
         # ---- Per-store MC-facing IOs ----
-        io_stAddrToMC_bits  = LogicVecArray(em, "io_stAddrToMC_bits",  "o", self.numStores, self.addrW, dyn_comp=True)
-        io_stAddrToMC_valid = LogicArray   (em, "io_stAddrToMC_valid", "o", self.numStores,             dyn_comp=True)
-        io_stAddrToMC_ready = LogicArray   (em, "io_stAddrToMC_ready", "i", self.numStores,             dyn_comp=True)
-        io_stDataToMC_bits  = LogicVecArray(em, "io_stDataToMC_bits",  "o", self.numStores, self.dataW, dyn_comp=True)
-        io_stDataToMC_valid = LogicArray   (em, "io_stDataToMC_valid", "o", self.numStores,             dyn_comp=True)
-        io_stDataToMC_ready = LogicArray   (em, "io_stDataToMC_ready", "i", self.numStores,             dyn_comp=True)
+        io_stAddrToMC_bits = LogicVecArray(
+            em, "io_stAddrToMC_bits", "o", self.numStores, self.addrW, dyn_comp=True
+        )
+        io_stAddrToMC_valid = LogicArray(
+            em, "io_stAddrToMC_valid", "o", self.numStores, dyn_comp=True
+        )
+        io_stAddrToMC_ready = LogicArray(
+            em, "io_stAddrToMC_ready", "i", self.numStores, dyn_comp=True
+        )
+        io_stDataToMC_bits = LogicVecArray(
+            em, "io_stDataToMC_bits", "o", self.numStores, self.dataW, dyn_comp=True
+        )
+        io_stDataToMC_valid = LogicArray(
+            em, "io_stDataToMC_valid", "o", self.numStores, dyn_comp=True
+        )
+        io_stDataToMC_ready = LogicArray(
+            em, "io_stDataToMC_ready", "i", self.numStores, dyn_comp=True
+        )
 
         # ---- Per-load internal signals ----
-        io_loadEn   = [Logic(em, f"io_loadEn_{i}",  "w")                  for i in range(self.numLoads)]
-        wresp_valid = [Logic(em, f"wresp_valid_{i}", "w", force_reg=True) for i in range(self.numStores)]
-        io_storeEn  = [Logic(em, f"io_storeEn_{i}", "w")                  for i in range(self.numStores)]
-        mem_data_valid_st = [Logic(em, f"mem_data_valid_st_{i}", "w")              for i in range(self.numStores)]
+        io_loadEn = [Logic(em, f"io_loadEn_{i}", "w") for i in range(self.numLoads)]
+        wresp_valid = [
+            Logic(em, f"wresp_valid_{i}", "w", force_reg=True)
+            for i in range(self.numStores)
+        ]
+        io_storeEn = [Logic(em, f"io_storeEn_{i}", "w") for i in range(self.numStores)]
+        mem_data_valid_st = [
+            Logic(em, f"mem_data_valid_st_{i}", "w") for i in range(self.numStores)
+        ]
 
         empty_ld = [Logic(em, f"empty_ld_{i}", "w") for i in range(self.numLoads)]
         empty_st = [Logic(em, f"empty_st_{i}", "w") for i in range(self.numStores)]
@@ -131,16 +200,22 @@ class OrderingNetworkWrapper:
             em.add_comment(f"Process for wresp_valid_{i}")
             em.add_statement(em.get_reg_init_str())
             em.increase_indent()
-            em.add_custom_statement(CustomStatement("if rst = '1' then", "if (rst) begin"))
+            em.add_custom_statement(
+                CustomStatement("if rst = '1' then", "if (rst) begin")
+            )
             em.increase_indent()
             em.add_assignment(wresp_valid[i], Bit(0), in_process=True)
             em.decrease_indent()
-            em.add_custom_statement(CustomStatement("elsif rising_edge(clk) then", "end\nelse begin"))
+            em.add_custom_statement(
+                CustomStatement("elsif rising_edge(clk) then", "end\nelse begin")
+            )
             em.increase_indent()
-            em.add_custom_statement(CustomStatement(
-                f"if {io_storeEn[i].getNameRead()} = '1' and {io_stAddrToMC_ready[i].getNameRead()} = '1' then",
-                f"if ({io_storeEn[i].getNameRead()} && {io_stAddrToMC_ready[i].getNameRead()}) begin",
-            ))
+            em.add_custom_statement(
+                CustomStatement(
+                    f"if {io_storeEn[i].getNameRead()} = '1' and {io_stAddrToMC_ready[i].getNameRead()} = '1' then",
+                    f"if ({io_storeEn[i].getNameRead()} && {io_stAddrToMC_ready[i].getNameRead()}) begin",
+                )
+            )
             em.increase_indent()
             em.add_assignment(wresp_valid[i], Bit(1), in_process=True)
             em.decrease_indent()
@@ -175,38 +250,117 @@ class OrderingNetworkWrapper:
             if q_type == "load":
                 i = ld_counter
                 ld_counter += 1
-                em.add_map(self._sp("circ_addr_i",       q_idx, i, "_i"), io_ldAddr_bits [i].getNameRead())
-                em.add_map(self._sp("circ_addr_valid_i", q_idx, i, "_i"), io_ldAddr_valid[i].getNameRead())
-                em.add_map(self._sp("circ_addr_ready_o", q_idx, i, "_o"), io_ldAddr_ready[i].getNameWrite())
-                em.add_map(self._sp("circ_data_o",       q_idx, i, "_o"), io_ldData_bits [i].getNameWrite())
-                em.add_map(self._sp("circ_data_valid_o", q_idx, i, "_o"), io_ldData_valid[i].getNameWrite())
-                em.add_map(self._sp("circ_data_ready_i", q_idx, i, "_i"), io_ldData_ready[i].getNameRead())
-                em.add_map(self._sp("mem_addr_o",        q_idx, i, "_o"), io_ldAddrToMC_bits   [i].getNameWrite())
-                em.add_map(self._sp("mem_addr_valid_o",  q_idx, i, "_o"), io_loadEn            [i].getNameRead())
-                em.add_map(self._sp("mem_data_i",        q_idx, i, "_i"), io_ldDataFromMC_bits [i].getNameRead())
-                em.add_map(self._sp("mem_addr_ready_i",  q_idx, i, "_i"), io_ldAddrToMC_ready  [i].getNameRead())
-                em.add_map(self._sp("mem_data_valid_i",  q_idx, i, "_i"), io_ldDataFromMC_valid[i].getNameRead())
-                em.add_map(self._sp("mem_data_ready_o",  q_idx, i, "_o"), io_ldDataFromMC_ready[i].getNameWrite())
-                em.add_map(self._sp("empty_o",           q_idx, i, "_o"), empty_ld[i].getNameRead())
+                em.add_map(
+                    self._sp("circ_addr_i", q_idx, i, "_i"),
+                    io_ldAddr_bits[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("circ_addr_valid_i", q_idx, i, "_i"),
+                    io_ldAddr_valid[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("circ_addr_ready_o", q_idx, i, "_o"),
+                    io_ldAddr_ready[i].getNameWrite(),
+                )
+                em.add_map(
+                    self._sp("circ_data_o", q_idx, i, "_o"),
+                    io_ldData_bits[i].getNameWrite(),
+                )
+                em.add_map(
+                    self._sp("circ_data_valid_o", q_idx, i, "_o"),
+                    io_ldData_valid[i].getNameWrite(),
+                )
+                em.add_map(
+                    self._sp("circ_data_ready_i", q_idx, i, "_i"),
+                    io_ldData_ready[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("mem_addr_o", q_idx, i, "_o"),
+                    io_ldAddrToMC_bits[i].getNameWrite(),
+                )
+                em.add_map(
+                    self._sp("mem_addr_valid_o", q_idx, i, "_o"),
+                    io_loadEn[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("mem_data_i", q_idx, i, "_i"),
+                    io_ldDataFromMC_bits[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("mem_addr_ready_i", q_idx, i, "_i"),
+                    io_ldAddrToMC_ready[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("mem_data_valid_i", q_idx, i, "_i"),
+                    io_ldDataFromMC_valid[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("mem_data_ready_o", q_idx, i, "_o"),
+                    io_ldDataFromMC_ready[i].getNameWrite(),
+                )
+                em.add_map(
+                    self._sp("empty_o", q_idx, i, "_o"), empty_ld[i].getNameRead()
+                )
 
             elif q_type == "store":
                 i = st_counter
                 st_counter += 1
-                em.add_map(self._sp("circ_addr_i",       q_idx, i, "_i"), io_stAddr_bits [i].getNameRead())
-                em.add_map(self._sp("circ_addr_valid_i", q_idx, i, "_i"), io_stAddr_valid[i].getNameRead())
-                em.add_map(self._sp("circ_addr_ready_o", q_idx, i, "_o"), io_stAddr_ready[i].getNameWrite())
-                em.add_map(self._sp("circ_data_i",       q_idx, i, "_i"), io_stData_bits [i].getNameRead())
-                em.add_map(self._sp("circ_data_valid_i", q_idx, i, "_i"), io_stData_valid[i].getNameRead())
-                em.add_map(self._sp("circ_data_ready_o", q_idx, i, "_o"), io_stData_ready[i].getNameWrite())
-                em.add_map(self._sp("mem_addr_o",       q_idx, i, "_o"), io_stAddrToMC_bits[i].getNameWrite())
-                em.add_map(self._sp("mem_addr_valid_o", q_idx, i, "_o"), io_storeEn        [i].getNameRead())
-                em.add_map(self._sp("mem_data_o",       q_idx, i, "_o"), io_stDataToMC_bits[i].getNameWrite())
-                em.add_map(self._sp("mem_addr_ready_i", q_idx, i, "_i"), io_stAddrToMC_ready[i].getNameRead())
-                em.add_map(self._sp("mem_data_ready_i", q_idx, i, "_i"), io_stDataToMC_ready[i].getNameRead())
-                em.add_map(self._sp("mem_data_valid_o", q_idx, i, "_o"), mem_data_valid_st[i].getNameWrite())
-                em.add_map(self._sp("mem_exec_valid_i", q_idx, i, "_i"), wresp_valid[i].getNameRead())
+                em.add_map(
+                    self._sp("circ_addr_i", q_idx, i, "_i"),
+                    io_stAddr_bits[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("circ_addr_valid_i", q_idx, i, "_i"),
+                    io_stAddr_valid[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("circ_addr_ready_o", q_idx, i, "_o"),
+                    io_stAddr_ready[i].getNameWrite(),
+                )
+                em.add_map(
+                    self._sp("circ_data_i", q_idx, i, "_i"),
+                    io_stData_bits[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("circ_data_valid_i", q_idx, i, "_i"),
+                    io_stData_valid[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("circ_data_ready_o", q_idx, i, "_o"),
+                    io_stData_ready[i].getNameWrite(),
+                )
+                em.add_map(
+                    self._sp("mem_addr_o", q_idx, i, "_o"),
+                    io_stAddrToMC_bits[i].getNameWrite(),
+                )
+                em.add_map(
+                    self._sp("mem_addr_valid_o", q_idx, i, "_o"),
+                    io_storeEn[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("mem_data_o", q_idx, i, "_o"),
+                    io_stDataToMC_bits[i].getNameWrite(),
+                )
+                em.add_map(
+                    self._sp("mem_addr_ready_i", q_idx, i, "_i"),
+                    io_stAddrToMC_ready[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("mem_data_ready_i", q_idx, i, "_i"),
+                    io_stDataToMC_ready[i].getNameRead(),
+                )
+                em.add_map(
+                    self._sp("mem_data_valid_o", q_idx, i, "_o"),
+                    mem_data_valid_st[i].getNameWrite(),
+                )
+                em.add_map(
+                    self._sp("mem_exec_valid_i", q_idx, i, "_i"),
+                    wresp_valid[i].getNameRead(),
+                )
                 em.add_map(self._sp("mem_exec_ready_o", q_idx, i, "_o"))
-                em.add_map(self._sp("empty_o",          q_idx, i, "_o"), empty_st[i].getNameRead())
+                em.add_map(
+                    self._sp("empty_o", q_idx, i, "_o"), empty_st[i].getNameRead()
+                )
 
         em.complete_instantiation()
 

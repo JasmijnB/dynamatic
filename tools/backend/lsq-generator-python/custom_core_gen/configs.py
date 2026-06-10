@@ -25,31 +25,43 @@ class QueueConfig:
         self.is_succ = False
         self.is_pred = False
 
-        assert self.q_type in ["load", "store"], "QueueType must be either 'load' or 'store'"
+        assert self.q_type in [
+            "load",
+            "store",
+        ], "QueueType must be either 'load' or 'store'"
         assert self.num_entries > 0, "NumEntries must be greater than 0"
-        assert (self.num_entries & (self.num_entries - 1)) == 0, f"NumEntries must be a power of 2, got {self.num_entries}"
+        assert (
+            self.num_entries & (self.num_entries - 1)
+        ) == 0, f"NumEntries must be a power of 2, got {self.num_entries}"
         assert self.data_width > 0, "DataWidth must be greater than 0"
         assert self.addr_width > 0, "AddrWidth must be greater than 0"
         assert self.id_width > 0, "IDWidth must be greater than 0"
         assert self.q_addr_width > 0, "QueueAddrWidth must be greater than 0"
-        assert 0 <= self.id_val < (1 << self.id_width), f"IDVal must be between 0 and {(1 << self.id_width) - 1}"
+        assert (
+            0 <= self.id_val < (1 << self.id_width)
+        ), f"IDVal must be between 0 and {(1 << self.id_width) - 1}"
 
 
 class DependencyCheckerConfig:
-    pq: 'QueueConfig'
-    sq: 'QueueConfig'
-    succ_can_execute_once: bool = False # Whether this dependency checker checks for dependencies in reverse order
+    pq: "QueueConfig"
+    sq: "QueueConfig"
+    succ_can_execute_once: bool = (
+        False  # Whether this dependency checker checks for dependencies in reverse order
+    )
     access_disparity_width: int = 4
 
-    def __init__(self, config: dict, pq: 'QueueConfig'=None, sq: 'QueueConfig'=None):
+    def __init__(
+        self, config: dict, pq: "QueueConfig" = None, sq: "QueueConfig" = None
+    ):
         self.pq = pq
         self.sq = sq
         self.succ_can_execute_once = config.get("succCanExecuteOnce")
         self.access_disparity_width = config.get("AccessDisparityWidth")
 
     @staticmethod
-    def from_parts(dc_config: dict, pq: 'QueueConfig',
-                   sq: 'QueueConfig') -> 'DependencyCheckerConfig':
+    def from_parts(
+        dc_config: dict, pq: "QueueConfig", sq: "QueueConfig"
+    ) -> "DependencyCheckerConfig":
         obj = DependencyCheckerConfig.__new__(DependencyCheckerConfig)
         obj.pq = pq
         obj.sq = sq
@@ -65,7 +77,7 @@ class OrderingNetworkConfig:
     edge_dp: list
     port_bb_ids: list
     ports_to_queue: list
-    queues: list   # list[QueueConfig]
+    queues: list  # list[QueueConfig]
     dependency_checkers: list  # list[DependencyCheckerConfig]
 
     def __init__(self, config: dict):
@@ -77,9 +89,11 @@ class OrderingNetworkConfig:
         self.ports_to_queue = config["portsToQueue"]
         self.queues = [QueueConfig(q) for q in config["queues"]]
         pq, sq = self.queues[0], self.queues[1]
-        self.dependency_checkers = [DependencyCheckerConfig(dc, pq, sq) for dc in config["dependencyCheckers"]]
+        self.dependency_checkers = [
+            DependencyCheckerConfig(dc, pq, sq) for dc in config["dependencyCheckers"]
+        ]
 
     @staticmethod
-    def from_json(json_path: str) -> 'OrderingNetworkConfig':
+    def from_json(json_path: str) -> "OrderingNetworkConfig":
         with open(json_path, "r") as f:
             return OrderingNetworkConfig(json.load(f))
