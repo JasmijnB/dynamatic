@@ -21,9 +21,7 @@ DC_TO_PQ_MAP = {
 
 
 DC_TO_SQ_MAP = {
-    "sq_addr_i":       "q_addr_o",
-    "sq_tail_i":    "alloc_ptr_o",
-    "sq_head_i":     "head_ptr_o",
+    "sq_head_i":         "queue_head_o",
     "sq_access_en_i":    "access_en_o",
     "allow_sq_access_o": "allow_access_i",
 }
@@ -121,12 +119,19 @@ class Structure(Generator):
     def generate_from_json(self, em, config: OrderingNetworkConfig, out_path):
         out_file = f"{out_path}/{self.name}.{em.get_file_suffix()}"
 
-        # One Queue def per entry in config.queues
-        queue_defs = {}
-        for queue_idx, q_config in enumerate(config.queues):
-            q_def = Queue(name=f"queue_{queue_idx}", suffix="", configs=q_config)
+        # Derive pred/succ roles from graph topology
+        pred_ports = set(config.edge_src)
+        succ_ports = set(config.edge_dst)
+
+        # One Queue def per port instance; is_pred/is_succ are set from the graph
+        queue_defs = {}  # port_idx -> Queue
+        for port_idx, queue_config_idx in enumerate(config.ports_to_queue):
+            q_config = copy(config.queues[queue_config_idx])
+            q_config.is_pred = port_idx in pred_ports
+            q_config.is_succ = port_idx in succ_ports
+            q_def = Queue(name=f"queue_{port_idx}", suffix="", configs=q_config)
             q_def.generate(em.new(), path_rtl=out_path, out_file=out_file)
-            queue_defs[queue_idx] = q_def
+            queue_defs[port_idx] = q_def
 
         # One DependencyChecker def per unique (src_queue_idx, dst_queue_idx) pair
         dc_def_map = {}
@@ -143,20 +148,22 @@ class Structure(Generator):
                 dc_def.generate(em.new(), path_rtl=out_path, out_file=out_file)
                 dc_def_map[key] = dc_def
 
-        # Validate port maps
-        any_queue_def = next(iter(queue_defs.values()))
+        # Validate port maps using graph-derived pred/succ defs
+        pred_queue_def = queue_defs[next(iter(pred_ports))]
+        succ_queue_def = queue_defs[next(iter(succ_ports))]
         any_dc_def = next(iter(dc_def_map.values()))
 
-        q_ports  = set(any_queue_def.ports.keys())
+        pq_ports = set(pred_queue_def.ports.keys())
+        sq_ports = set(succ_queue_def.ports.keys())
         dc_ports = set(any_dc_def.ports.keys())
 
         pq_keys, pq_vals = set(DC_TO_PQ_MAP.keys()), set(DC_TO_PQ_MAP.values())
         sq_keys, sq_vals = set(DC_TO_SQ_MAP.keys()), set(DC_TO_SQ_MAP.values())
 
-        assert pq_keys <= dc_ports, f"DC_TO_PQ_MAP keys not in DC ports:     {pq_keys - dc_ports}"
-        assert pq_vals <= q_ports,  f"DC_TO_PQ_MAP values not in queue ports: {pq_vals - q_ports}"
-        assert sq_keys <= dc_ports, f"DC_TO_SQ_MAP keys not in DC ports:     {sq_keys - dc_ports}"
-        assert sq_vals <= q_ports,  f"DC_TO_SQ_MAP values not in queue ports: {sq_vals - q_ports}"
+        assert pq_keys <= dc_ports,  f"DC_TO_PQ_MAP keys not in DC ports:      {pq_keys - dc_ports}"
+        assert pq_vals <= pq_ports,  f"DC_TO_PQ_MAP values not in pred ports:  {pq_vals - pq_ports}"
+        assert sq_keys <= dc_ports,  f"DC_TO_SQ_MAP keys not in DC ports:      {sq_keys - dc_ports}"
+        assert sq_vals <= sq_ports,  f"DC_TO_SQ_MAP values not in succ ports:  {sq_vals - sq_ports}"
         assert (pq_keys | sq_keys) == dc_ports, f"DC ports not fully mapped: {dc_ports - (pq_keys | sq_keys)}"
 
         # Count ports per queue config
@@ -164,19 +171,25 @@ class Structure(Generator):
         for queue_config_idx in config.ports_to_queue:
             group_sizes[queue_config_idx] += 1
 
-        # Build universal port arrays per queue config
+        # Build universal port arrays per queue config.
+        # Use the first port instance for each config group as the representative def.
+        representative_defs = {}
+        for port_idx, queue_config_idx in enumerate(config.ports_to_queue):
+            if queue_config_idx not in representative_defs:
+                representative_defs[queue_config_idx] = queue_defs[port_idx]
+
         universal_vars = {}
-        for queue_idx, q_def in queue_defs.items():
-            group_size = group_sizes[queue_idx]
+        for queue_config_idx, q_def in representative_defs.items():
+            group_size = group_sizes[queue_config_idx]
             q_port_map = q_def.get_ports()
             global_q_ports = get_global_queue_ports(q_def)
-            universal_vars[queue_idx] = {}
+            universal_vars[queue_config_idx] = {}
             for port in global_q_ports:
                 signal = q_port_map[port]
                 if type(signal) == LogicVec:
-                    universal_vars[queue_idx][port] = LogicVecArray(em, f"{port}_q{queue_idx}_array", signal.type, group_size, signal.size)
+                    universal_vars[queue_config_idx][port] = LogicVecArray(em, f"{port}_q{queue_config_idx}_array", signal.type, group_size, signal.size)
                 elif type(signal) == Logic:
-                    universal_vars[queue_idx][port] = LogicArray(em, f"{port}_q{queue_idx}_array", signal.type, group_size)
+                    universal_vars[queue_config_idx][port] = LogicArray(em, f"{port}_q{queue_config_idx}_array", signal.type, group_size)
                 else:
                     raise Exception(f"Unsupported signal type {type(signal)} for port {port}")
 
@@ -187,7 +200,7 @@ class Structure(Generator):
             queue_type = config.queues[queue_config_idx].q_type
             within_group_idx = group_counters[queue_config_idx]
             group_counters[queue_config_idx] += 1
-            q_instance = QueueInstance(queue_defs[queue_config_idx], within_group_idx, queue_type)
+            q_instance = QueueInstance(queue_defs[port_idx], within_group_idx, queue_type)
             q_instance.init_port_vars(universal_vars[queue_config_idx])
             queue_instances[port_idx] = q_instance
 

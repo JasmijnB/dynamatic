@@ -25,12 +25,8 @@ class DependencyChecker(Generator):
         pq_length_i  = self._add_port(LogicVec(em, "pq_length",  "i", pq_ptr_width))
 
         # ====[ successor ]===
-        sq_addr_i = self._add_port(LogicVecArray(
-            em, "sq_addr", "i", self.configs.sq.num_entries, self.configs.sq.addr_width
-        ))
-        self._add_port(         LogicVec(em, "sq_tail",      "i", self.configs.sq.q_addr_width))
-        sq_head_i      = self._add_port(LogicVec(em, "sq_head",      "i", self.configs.sq.q_addr_width))
-        sq_access_en_i = self._add_port(Logic   (em, "sq_access_en", "i"))
+        sq_head = self._add_port(LogicVec(em, "sq_head", "i", self.configs.sq.addr_width))
+        sq_access_en_i  = self._add_port(Logic   (em, "sq_access_en",  "i"))
 
         ######  Outputs ######
         allow_sq_access_o = self._add_port(Logic(em, "allow_sq_access", "o"))
@@ -61,12 +57,9 @@ class DependencyChecker(Generator):
             em.add_assignment((ones, i), Bit(1).when(Val(i, size=ad_width) <= access_disparity).else_(Bit(0)))
         CyclicRightShift(em, check_mask, ones, pq_done_i)
 
-        tail_address = LogicVec(em, "tail_address", "w", self.configs.sq.addr_width)
-        MuxLookUp(em, tail_address, sq_addr_i, sq_head_i)
-
         conflicts = LogicVec(em, "conflicts", "w", self.configs.pq.num_entries)
         for i in range(self.configs.pq.num_entries):
-            em.add_assignment((conflicts, i), Val(check_mask, i).when(Val(pq_addr_i, i) == tail_address).else_(Bit(0)))
+            em.add_assignment((conflicts, i), Val(check_mask, i).when(Val(pq_addr_i, i) == sq_head).else_(Bit(0)))
 
         Reduce(em, conflict, conflicts, BinOp.OR)
 

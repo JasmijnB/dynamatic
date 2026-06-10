@@ -22,6 +22,8 @@ class QueueConfig:
         self.ldp_addr_width = config["LDPAddrWidth"]
         self.st_resp = config["StResp"]
         self.q_addr_width = math.ceil(math.log2(self.num_entries))
+        self.is_succ = False
+        self.is_pred = False
 
         assert self.q_type in ["load", "store"], "QueueType must be either 'load' or 'store'"
         assert self.num_entries > 0, "NumEntries must be greater than 0"

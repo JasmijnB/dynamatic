@@ -10,56 +10,81 @@ class Queue(Generator):
     def __init__(self, name: str, suffix: str, configs: Configs):
         super().__init__(name, suffix, configs)
 
-
     def generate(self, em: Emitter, path_rtl, out_file: str = None) -> None:
         self.ports.clear()
         is_store = self.configs.q_type == "store"
 
         # IOs - common
-        empty_o           = self._add_port(Logic   (em, "empty",          "o"))
-        circ_addr_i       = self._add_port(LogicVec(em, "circ_addr",      "i", self.configs.addr_width))
-        circ_addr_valid_i = self._add_port(Logic   (em, "circ_addr_valid", "i"))
-        circ_addr_ready_o = self._add_port(Logic   (em, "circ_addr_ready", "o"))
+        empty_o = self._add_port(Logic(em, "empty", "o"))
+        circ_addr_i = self._add_port(
+            LogicVec(em, "circ_addr", "i", self.configs.addr_width)
+        )
+        circ_addr_valid_i = self._add_port(Logic(em, "circ_addr_valid", "i"))
+        circ_addr_ready_o = self._add_port(Logic(em, "circ_addr_ready", "o"))
 
-        mem_addr_valid_o  = self._add_port(Logic   (em, "mem_addr_valid",  "o"))
-        mem_addr_ready_i  = self._add_port(Logic   (em, "mem_addr_ready",  "i"))
-        mem_addr_o        = self._add_port(LogicVec(em, "mem_addr",        "o", self.configs.addr_width))
+        mem_addr_valid_o = self._add_port(Logic(em, "mem_addr_valid", "o"))
+        mem_addr_ready_i = self._add_port(Logic(em, "mem_addr_ready", "i"))
+        mem_addr_o = self._add_port(
+            LogicVec(em, "mem_addr", "o", self.configs.addr_width)
+        )
 
         # IOs - type-specific
         if is_store:
-            circ_data_i       = self._add_port(LogicVec(em, "circ_data",       "i", self.configs.data_width))
-            circ_data_valid_i = self._add_port(Logic   (em, "circ_data_valid", "i"))
-            circ_data_ready_o = self._add_port(Logic   (em, "circ_data_ready", "o"))
-            mem_data_o        = self._add_port(LogicVec(em, "mem_data",        "o", self.configs.data_width))
-            mem_data_valid_o  = self._add_port(Logic   (em, "mem_data_valid",  "o"))
-            mem_data_ready_i  = self._add_port(Logic   (em, "mem_data_ready",  "i"))
-            mem_exec_valid_i  = self._add_port(Logic(em, "mem_exec_valid",  "i"))
-            mem_exec_ready_o  = self._add_port(Logic(em, "mem_exec_ready",  "o"))
+            circ_data_i = self._add_port(
+                LogicVec(em, "circ_data", "i", self.configs.data_width)
+            )
+            circ_data_valid_i = self._add_port(Logic(em, "circ_data_valid", "i"))
+            circ_data_ready_o = self._add_port(Logic(em, "circ_data_ready", "o"))
+            mem_data_o = self._add_port(
+                LogicVec(em, "mem_data", "o", self.configs.data_width)
+            )
+            mem_data_valid_o = self._add_port(Logic(em, "mem_data_valid", "o"))
+            mem_data_ready_i = self._add_port(Logic(em, "mem_data_ready", "i"))
+            mem_exec_valid_i = self._add_port(Logic(em, "mem_exec_valid", "i"))
+            mem_exec_ready_o = self._add_port(Logic(em, "mem_exec_ready", "o"))
             if self.configs.st_resp:
                 circ_exec_valid_o = self._add_port(Logic(em, "circ_exec_valid", "o"))
                 circ_exec_ready_i = self._add_port(Logic(em, "circ_exec_ready", "i"))
         else:
-            mem_data_valid_i  = self._add_port(Logic   (em, "mem_data_valid",  "i"))
-            mem_data_ready_o  = self._add_port(Logic   (em, "mem_data_ready",  "o"))
-            mem_data_i        = self._add_port(LogicVec(em, "mem_data",        "i", self.configs.data_width))
-            circ_data_o       = self._add_port(LogicVec(em, "circ_data",       "o", self.configs.data_width))
-            circ_data_valid_o = self._add_port(Logic   (em, "circ_data_valid", "o"))
-            circ_data_ready_i = self._add_port(Logic   (em, "circ_data_ready", "i"))
+            mem_data_valid_i = self._add_port(Logic(em, "mem_data_valid", "i"))
+            mem_data_ready_o = self._add_port(Logic(em, "mem_data_ready", "o"))
+            mem_data_i = self._add_port(
+                LogicVec(em, "mem_data", "i", self.configs.data_width)
+            )
+            circ_data_o = self._add_port(
+                LogicVec(em, "circ_data", "o", self.configs.data_width)
+            )
+            circ_data_valid_o = self._add_port(Logic(em, "circ_data_valid", "o"))
+            circ_data_ready_i = self._add_port(Logic(em, "circ_data_ready", "i"))
 
         allow_access_i = self._add_port(Logic(em, "allow_access", "i"))
 
         # Shared pointer infrastructure
-        (q_done, q_issue, q_tail, q_head,
-         q_tail_oh,
-         done_en, issue_en, load_en, alloc_en,
-         q_full, q_empty, q_full_w_issue,
-         q_issue_sel) = self._setup_pointers(em)
+        (
+            q_done,
+            q_issue,
+            q_tail,
+            q_head,
+            q_tail_oh,
+            done_en,
+            issue_en,
+            head_en,
+            alloc_en,
+            q_full,
+            q_empty,
+            q_full_w_issue,
+            q_issue_sel,
+        ) = self._setup_pointers(em)
 
         # Address buffer (both types)
-        q_addr = LogicVecArray(em, "q_addr", "r", self.configs.num_entries, self.configs.addr_width)
+        q_addr = LogicVecArray(
+            em, "q_addr", "r", self.configs.num_entries, self.configs.addr_width
+        )
         for i in range(self.configs.num_entries):
-            em.add_assignment(q_addr[i],
-                circ_addr_i.when(Val(q_tail_oh, i) & alloc_en).else_(q_addr[i]))
+            em.add_assignment(
+                q_addr[i],
+                circ_addr_i.when(Val(q_tail_oh, i) & alloc_en).else_(q_addr[i]),
+            )
         q_addr.regInit()
 
         em.add_assignment(empty_o, q_empty)
@@ -71,13 +96,15 @@ class Queue(Generator):
         em.add_assignment(alloc_en, circ_addr_valid_i & can_alloc)
 
         # Retirement
-        em.add_assignment(load_en, ~q_empty & allow_access_i)
+        em.add_assignment(head_en, ~q_empty & allow_access_i)
 
         # Issue
         can_issue = Logic(em, "can_issue", "w")
 
-        em.add_assignment(can_issue,
-            ((q_issue == q_head) & load_en) | (q_issue != q_head) | q_full_w_issue)
+        em.add_assignment(
+            can_issue,
+            ((q_issue == q_head) & head_en) | (q_issue != q_head) | q_full_w_issue,
+        )
         em.add_assignment(issue_en, can_issue & mem_addr_ready_i)
 
         em.add_assignment(mem_addr_valid_o, can_issue)
@@ -85,24 +112,26 @@ class Queue(Generator):
         MuxLookUp(em, mem_addr_o, q_addr, q_issue_sel)
 
         if is_store:
-            em.add_assignment(mem_data_o,        circ_data_i)
-            em.add_assignment(mem_data_valid_o,  circ_data_valid_i)
+            em.add_assignment(mem_data_o, circ_data_i)
+            em.add_assignment(mem_data_valid_o, circ_data_valid_i)
             em.add_assignment(circ_data_ready_o, mem_data_ready_i)
 
             if self.configs.st_resp:
                 em.add_assignment(circ_exec_valid_o, mem_exec_valid_i)
-                em.add_assignment(mem_exec_ready_o,  circ_exec_ready_i)
+                em.add_assignment(mem_exec_ready_o, circ_exec_ready_i)
                 em.add_assignment(done_en, mem_exec_valid_i & circ_exec_ready_i)
             else:
                 em.add_assignment(mem_exec_ready_o, Bit(1))
                 em.add_assignment(done_en, mem_exec_valid_i)
         else:
-            em.add_assignment(mem_data_ready_o,   circ_data_ready_i)
-            em.add_assignment(circ_data_o,         mem_data_i)
-            em.add_assignment(circ_data_valid_o,   mem_data_valid_i)
+            em.add_assignment(mem_data_ready_o, circ_data_ready_i)
+            em.add_assignment(circ_data_o, mem_data_i)
+            em.add_assignment(circ_data_valid_o, mem_data_valid_i)
             em.add_assignment(done_en, mem_data_valid_i & circ_data_ready_i)
 
-        self._generate_observable_ports(em, q_addr, q_done, q_tail, q_head, done_en, alloc_en, load_en)
+        self._generate_observable_ports(
+            em, q_addr, q_done, q_tail, q_head, done_en, alloc_en, head_en
+        )
 
         self._write_to_file(em, path_rtl, out_file)
 
@@ -120,28 +149,28 @@ class Queue(Generator):
         The MSB acts as a generation bit so that equal pointers (all bits) means
         empty, and equal lower bits with differing MSBs means full.
 
-        alloc_en, issue_en, and load_en (head-retirement enable) are declared as
+        alloc_en, issue_en, and head_en (head-retirement enable) are declared as
         wires; the caller is responsible for assigning logic to each of them.
 
         Returns:
             q_done, q_issue, q_tail, q_head — pointer registers
             q_tail_oh                       — one-hot of q_tail index
-            done_en, issue_en, load_en, alloc_en — enable wires (to be driven by caller)
+            done_en, issue_en, head_en, alloc_en — enable wires (to be driven by caller)
             q_full, q_empty, q_full_w_issue — status signals
             q_issue_sel                     — lower bits of q_issue for MuxLookUp
         """
         n = self.configs.q_addr_width
         ptr_width = n + 1
 
-        q_done  = LogicVec(em, "q_done",  "r", ptr_width)
+        q_tail = LogicVec(em, "q_tail", "r", ptr_width)
+        q_head = LogicVec(em, "q_head", "r", ptr_width)
         q_issue = LogicVec(em, "q_issue", "r", ptr_width)
-        q_tail  = LogicVec(em, "q_tail",  "r", ptr_width)
-        q_head  = LogicVec(em, "q_head",  "r", ptr_width)
+        q_done = LogicVec(em, "q_done", "r", ptr_width)
 
-        q_done_next  = LogicVec(em, "q_done_next",  "w", ptr_width)
+        q_tail_next = LogicVec(em, "q_tail_next", "w", ptr_width)
+        q_head_next = LogicVec(em, "q_head_next", "w", ptr_width)
         q_issue_next = LogicVec(em, "q_issue_next", "w", ptr_width)
-        q_tail_next  = LogicVec(em, "q_tail_next",  "w", ptr_width)
-        q_head_next  = LogicVec(em, "q_head_next",  "w", ptr_width)
+        q_done_next = LogicVec(em, "q_done_next", "w", ptr_width)
 
         q_tail_oh = LogicVec(em, "q_tail_oh", "w", self.configs.num_entries)
 
@@ -151,31 +180,32 @@ class Queue(Generator):
         BitsToOH(em, q_tail_oh, q_tail_idx)
 
         q_issue_sel = LogicVec(em, "q_issue_sel", "w", n)
-        em.add_assignment(q_issue_sel, Val(em.slice_var(q_issue.getNameRead(), n - 1, 0)))
+        em.add_assignment(
+            q_issue_sel, Val(em.slice_var(q_issue.getNameRead(), n - 1, 0))
+        )
 
-        done_en  = Logic(em, "done_en",  "w")
-        issue_en = Logic(em, "issue_en", "w")
         alloc_en = Logic(em, "alloc_en", "w")
-        load_en  = Logic(em, "load_en",  "w")
+        head_en = Logic(em, "head_en", "w")
+        issue_en = Logic(em, "issue_en", "w")
+        done_en = Logic(em, "done_en", "w")
 
-        q_full         = Logic(em, "q_full",         "w")
-        q_empty        = Logic(em, "q_empty",        "w")
+        q_full = Logic(em, "q_full", "w")
+        q_empty = Logic(em, "q_empty", "w")
         q_full_w_issue = Logic(em, "q_full_w_issue", "w")
 
-        WrapAddConst(em, q_issue_next, q_issue, 1, self.configs.num_entries)
-        WrapAddConst(em, q_done_next,  q_done,  1, self.configs.num_entries)
-        WrapAddConst(em, q_tail_next,  q_tail,  1, self.configs.num_entries)
-        WrapAddConst(em, q_head_next,  q_head,  1, self.configs.num_entries)
+        for pt, pt_next in [
+            (q_done, q_done_next),
+            (q_issue, q_issue_next),
+            (q_tail, q_tail_next),
+            (q_head, q_head_next),
+        ]:
+            WrapAddConst(em, pt_next, pt, 1, self.configs.num_entries)
+            em.add_assignment(pt, pt_next)
 
-        em.add_assignment(q_done,  q_done_next)
-        em.add_assignment(q_tail,  q_tail_next)
-        em.add_assignment(q_issue, q_issue_next)
-        em.add_assignment(q_head,  q_head_next)
-
-        q_done .regInit(init=0, enable=done_en)
+        q_done.regInit(init=0, enable=done_en)
         q_issue.regInit(init=0, enable=issue_en)
-        q_tail .regInit(init=0, enable=alloc_en)
-        q_head .regInit(init=0, enable=load_en)
+        q_tail.regInit(init=0, enable=alloc_en)
+        q_head.regInit(init=0, enable=head_en)
 
         # Full between tail and done: lower bits match but generation bits differ
         tail_msb = Val(em.index_var(q_tail.getNameRead(), n))
@@ -189,51 +219,83 @@ class Queue(Generator):
 
         # Full between issue and head: same lower bits, different generation
         issue_msb = Val(em.index_var(q_issue.getNameRead(), n))
-        head_msb  = Val(em.index_var(q_head.getNameRead(),  n))
+        head_msb = Val(em.index_var(q_head.getNameRead(), n))
         issue_low = Val(em.slice_var(q_issue.getNameRead(), n - 1, 0))
-        head_low  = Val(em.slice_var(q_head.getNameRead(),  n - 1, 0))
-        em.add_assignment(q_full_w_issue, (issue_msb != head_msb) & (issue_low == head_low))
+        head_low = Val(em.slice_var(q_head.getNameRead(), n - 1, 0))
+        em.add_assignment(
+            q_full_w_issue, (issue_msb != head_msb) & (issue_low == head_low)
+        )
 
-        return (q_done, q_issue, q_tail, q_head,
-                q_tail_oh,
-                done_en, issue_en, load_en, alloc_en,
-                q_full, q_empty, q_full_w_issue,
-                q_issue_sel)
+        return (
+            q_done,
+            q_issue,
+            q_tail,
+            q_head,
+            q_tail_oh,
+            done_en,
+            issue_en,
+            head_en,
+            alloc_en,
+            q_full,
+            q_empty,
+            q_full_w_issue,
+            q_issue_sel,
+        )
 
-
-    def _generate_observable_ports(self, em: Emitter, q_addr,
-                                    q_done, q_tail, q_head,
-                                    done_en, alloc_en, load_en) -> None:
+    def _generate_observable_ports(
+        self, em: Emitter, q_addr, q_done, q_tail, q_head, done_en, alloc_en, head_en
+    ) -> None:
         """Add output ports that expose internal queue state for observation."""
         n = self.configs.q_addr_width
         ptr_width = n + 1
 
         q_addr_out_o = self._add_port(
-            LogicVecArray(em, "q_addr", "o", self.configs.num_entries, self.configs.addr_width))
+            LogicVecArray(
+                em, "q_addr", "o", self.configs.num_entries, self.configs.addr_width
+            )
+        )
         for i in range(self.configs.num_entries):
             em.add_assignment(q_addr_out_o[i], q_addr[i])
 
-        done_ptr_o  = self._add_port(LogicVec(em, "done_ptr",  "o", n))
+        done_ptr_o = self._add_port(LogicVec(em, "done_ptr", "o", n))
         alloc_ptr_o = self._add_port(LogicVec(em, "alloc_ptr", "o", n))
-        head_ptr_o  = self._add_port(LogicVec(em, "head_ptr",  "o", n))
+        head_ptr_o = self._add_port(LogicVec(em, "head_ptr", "o", n))
 
-        em.add_assignment(done_ptr_o,  Val(em.slice_var(q_done.getNameRead(), n - 1, 0)))
-        em.add_assignment(alloc_ptr_o, Val(em.slice_var(q_tail.getNameRead(), n - 1, 0)))
-        em.add_assignment(head_ptr_o,  Val(em.slice_var(q_head.getNameRead(), n - 1, 0)))
+        em.add_assignment(done_ptr_o, Val(em.slice_var(q_done.getNameRead(), n - 1, 0)))
+        em.add_assignment(
+            alloc_ptr_o, Val(em.slice_var(q_tail.getNameRead(), n - 1, 0))
+        )
+        em.add_assignment(head_ptr_o, Val(em.slice_var(q_head.getNameRead(), n - 1, 0)))
 
         # Number of entries from done to tail (allocated but not yet complete).
-        length_o    = self._add_port(LogicVec(em, "length",    "o", ptr_width))
+        length_o = self._add_port(LogicVec(em, "length", "o", ptr_width))
         em.add_assignment(length_o, q_tail - q_done)
 
-        done_en_o   = self._add_port(Logic(em, "done_en",   "o"))
+        done_en_o = self._add_port(Logic(em, "done_en", "o"))
         access_en_o = self._add_port(Logic(em, "access_en", "o"))
 
-        em.add_assignment(done_en_o,   done_en)
-        em.add_assignment(access_en_o, load_en)
+        em.add_assignment(done_en_o, done_en)
+        em.add_assignment(access_en_o, head_en)
+
+        if self.configs.is_succ:
+            q_head_sel = LogicVec(em, "q_head_sel", "w", n)
+            em.add_assignment(
+                q_head_sel, Val(em.slice_var(q_head.getNameRead(), n - 1, 0))
+            )
+            queue_head_w = LogicVec(em, "queue_head_w", "w", self.configs.addr_width)
+            MuxLookUp(em, queue_head_w, q_addr, q_head_sel)
+            queue_head_o = self._add_port(
+                LogicVec(em, "queue_head", "o", self.configs.addr_width)
+            )
+            em.add_assignment(queue_head_o, queue_head_w)
+
 
     def _write_to_file(self, em: Emitter, path_rtl: str, out_file: str = None):
         output_str = em.get_definition_str(self.module_name)
-        path = out_file if out_file is not None else f"{path_rtl}/{self.name}.{em.get_file_suffix()}"
+        path = (
+            out_file
+            if out_file is not None
+            else f"{path_rtl}/{self.name}.{em.get_file_suffix()}"
+        )
         with open(path, "a") as file:
             file.write(output_str)
-
