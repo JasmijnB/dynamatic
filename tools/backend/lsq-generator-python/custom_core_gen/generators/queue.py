@@ -89,14 +89,29 @@ class Queue(Generator):
 
         em.add_assignment(empty_o, q_empty)
 
+        # bypass_addr_valid: queue is empty with no pending issues and a valid address.
+        # Deliberately excludes allow_access_i to break the combinatorial loop that
+        # would form through queue_head_o → dep-checker → allow_access_i → bypass_active.
+        bypass_addr_valid = Logic(em, "bypass_addr_valid", "w")
+        em.add_assignment(
+            bypass_addr_valid,
+            q_empty & (q_issue == q_head) & circ_addr_valid_i,
+        )
+
+        # bypass_active additionally requires allow_access_i; used for all control paths.
+        bypass_active = Logic(em, "bypass_active", "w")
+        em.add_assignment(bypass_active, bypass_addr_valid & allow_access_i)
+
         # Allocation
         can_alloc = Logic(em, "can_alloc", "w")
         em.add_assignment(can_alloc, ~q_full)
         em.add_assignment(circ_addr_ready_o, can_alloc)
         em.add_assignment(alloc_en, circ_addr_valid_i & can_alloc)
 
-        # Retirement
-        em.add_assignment(head_en, ~q_empty & allow_access_i)
+        # Retirement: also fires when bypass completes (memory accepts)
+        em.add_assignment(
+            head_en, (~q_empty & allow_access_i) | (bypass_active & mem_addr_ready_i)
+        )
 
         # Issue
         can_issue = Logic(em, "can_issue", "w")
@@ -105,11 +120,18 @@ class Queue(Generator):
             can_issue,
             ((q_issue == q_head) & head_en) | (q_issue != q_head) | q_full_w_issue,
         )
-        em.add_assignment(issue_en, can_issue & mem_addr_ready_i)
+        em.add_assignment(issue_en, (can_issue | bypass_active) & mem_addr_ready_i)
 
-        em.add_assignment(mem_addr_valid_o, can_issue)
+        em.add_assignment(mem_addr_valid_o, can_issue | bypass_active)
 
-        MuxLookUp(em, mem_addr_o, q_addr, q_issue_sel)
+        # In bypass mode route circ_addr_i directly; otherwise use the queue buffer
+        mem_addr_from_queue = LogicVec(
+            em, "mem_addr_from_queue", "w", self.configs.addr_width
+        )
+        MuxLookUp(em, mem_addr_from_queue, q_addr, q_issue_sel)
+        em.add_assignment(
+            mem_addr_o, circ_addr_i.when(bypass_active).else_(mem_addr_from_queue)
+        )
 
         if is_store:
             em.add_assignment(mem_data_o, circ_data_i)
@@ -130,7 +152,16 @@ class Queue(Generator):
             em.add_assignment(done_en, mem_data_valid_i & circ_data_ready_i)
 
         self._generate_observable_ports(
-            em, q_addr, q_done, q_tail, q_head, done_en, alloc_en, head_en
+            em,
+            q_addr,
+            q_done,
+            q_tail,
+            q_head,
+            done_en,
+            alloc_en,
+            head_en,
+            bypass_addr_valid,
+            circ_addr_i,
         )
 
         self._write_to_file(em, path_rtl, out_file)
@@ -243,7 +274,17 @@ class Queue(Generator):
         )
 
     def _generate_observable_ports(
-        self, em: Emitter, q_addr, q_done, q_tail, q_head, done_en, alloc_en, head_en
+        self,
+        em: Emitter,
+        q_addr,
+        q_done,
+        q_tail,
+        q_head,
+        done_en,
+        alloc_en,
+        head_en,
+        bypass_active=None,
+        circ_addr_i=None,
     ) -> None:
         """Add output ports that expose internal queue state for observation."""
         n = self.configs.q_addr_width
@@ -287,7 +328,13 @@ class Queue(Generator):
             queue_head_o = self._add_port(
                 LogicVec(em, "queue_head", "o", self.configs.addr_width)
             )
-            em.add_assignment(queue_head_o, queue_head_w)
+            if bypass_active is not None and circ_addr_i is not None:
+                em.add_assignment(
+                    queue_head_o,
+                    circ_addr_i.when(bypass_active).else_(queue_head_w),
+                )
+            else:
+                em.add_assignment(queue_head_o, queue_head_w)
 
     def _write_to_file(self, em: Emitter, path_rtl: str, out_file: str = None):
         output_str = em.get_definition_str(self.module_name)
