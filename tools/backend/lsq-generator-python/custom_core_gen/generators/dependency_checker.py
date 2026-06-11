@@ -4,6 +4,7 @@ from core_gen.operators import CyclicRightShift, MuxLookUp, Reduce
 from core_gen.ir import BinOp, Bin, Val, Bit, CustomStatement
 from custom_core_gen.configs import DependencyCheckerConfig
 from custom_core_gen.generators.generator import Generator
+from functools import reduce
 
 
 class DependencyChecker(Generator):
@@ -137,12 +138,24 @@ class DependencyChecker(Generator):
             "       - if the access disparity is negative (i.e. the corresponding entry has been complete)\n"
             "\t- AND, the access disparity is not maxed out\n"
         )
+        # ad is a signed number, so the max value it can take is 2^(n-1) - 1
         max_ad_val = (1 << (self.configs.access_disparity_width - 1)) - 1
+
+        conditions = [
+            corresponding_entry_allocated,
+            ~conflict | corresponding_entry_sent,
+        ]
+        
+        # if the max access disparity is larger or equal to to the queue size, 
+        # we don't need to check for overflows as the first condition already guarantees 
+        # that the access disparity cannot exceed the max
+        # because access_disparity <= pq_length_i and pq_length_i <= num_entries, so access_disparity <= num_entries
+        if max_ad_val < self.configs.pq.num_entries:
+            conditions.append(access_disparity <= Val(max_ad_val, size=ad_width))
+
         em.add_assignment(
             allow_sq_access_o,
-            corresponding_entry_allocated
-            & (~conflict | corresponding_entry_sent)
-            & (access_disparity <= Val(max_ad_val, size=ad_width)),
+            reduce(lambda a, b: a & b, conditions)
         )
 
         self._write_to_file(em, path_rtl, out_file)
