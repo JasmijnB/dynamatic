@@ -247,15 +247,19 @@ std::string handshake::MemoryControllerOp::getOperandName(unsigned idx) {
   if (std::string name = getMemOperandName(mcPorts, idx); !name.empty())
     return name;
 
-  // Get the operand name from a port to an LSQ
-  assert(mcPorts.connectsToLSQ() && "expected MC to connect to LSQ");
-  LSQLoadStorePort lsqPort = mcPorts.getLSQPort();
-  if (lsqPort.getLoadAddrInputIndex() == idx)
-    return getArrayElemName(LD_ADDR, mcPorts.getNumPorts<LoadPort>());
-  if (lsqPort.getStoreAddrInputIndex() == idx)
-    return getArrayElemName(ST_ADDR, mcPorts.getNumPorts<StorePort>());
-  assert(lsqPort.getStoreDataInputIndex() == idx && "unknown MC/LSQ operand");
-  return getArrayElemName(ST_DATA, mcPorts.getNumPorts<StorePort>());
+  // Get the operand name from a port to an ordering unit
+  assert(mcPorts.connectsToOrderingUnit() && "expected MC to connect to OU");
+  OrderingUnitPorts ouPort = mcPorts.getOrderingUnitPort();
+  unsigned numLoads = mcPorts.getNumPorts<LoadPort>();
+  unsigned numStores = mcPorts.getNumPorts<StorePort>();
+  auto signal = ouPort.lookupInputSignal(idx);
+  assert(signal && "unknown MC/OU operand");
+  auto [kind, i] = *signal;
+  if (kind == OrderingUnitPorts::SignalKind::LoadAddr)
+    return getArrayElemName(LD_ADDR, numLoads + i);
+  if (kind == OrderingUnitPorts::SignalKind::StoreAddr)
+    return getArrayElemName(ST_ADDR, numStores + i);
+  return getArrayElemName(ST_DATA, numStores + i);
 }
 
 std::string handshake::MemoryControllerOp::getResultName(unsigned idx) {
@@ -269,11 +273,14 @@ std::string handshake::MemoryControllerOp::getResultName(unsigned idx) {
   if (std::string name = getMemResultName(mcPorts, idx); !name.empty())
     return name;
 
-  // Get the operand name from a port to an LSQ
-  assert(mcPorts.connectsToLSQ() && "expected MC to connect to LSQ");
-  LSQLoadStorePort lsqPort = mcPorts.getLSQPort();
-  assert(lsqPort.getLoadDataOutputIndex() == idx && "unknown MC/LSQ result");
-  return getArrayElemName(LD_DATA, mcPorts.getNumPorts<LoadPort>());
+  // Get the result name from a port to an ordering unit
+  assert(mcPorts.connectsToOrderingUnit() && "expected MC to connect to OU");
+  OrderingUnitPorts ouPort = mcPorts.getOrderingUnitPort();
+  unsigned numLoads = mcPorts.getNumPorts<LoadPort>();
+  for (unsigned i = 0; i < ouPort.getNumLoads(); ++i)
+    if (ouPort.getLoadDataOutputIndex(i) == idx)
+      return getArrayElemName(LD_DATA, numLoads + i);
+  llvm_unreachable("unknown MC/OU result");
 }
 
 std::string handshake::MemOrderingUnitOp::getOperandName(unsigned idx) {

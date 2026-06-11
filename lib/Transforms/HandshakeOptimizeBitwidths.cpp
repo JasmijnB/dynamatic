@@ -446,7 +446,7 @@ class OptDataConfig {
 public:
   /// Constructs the configuration from the specific operation being
   /// transformed.
-  OptDataConfig(Op op) : op(op) {};
+  OptDataConfig(Op op) : op(op){};
 
   /// Returns the list of operands that carry data. The method must return at
   /// least one operand. If multiple operands are returned, they must all have
@@ -519,7 +519,7 @@ protected:
 /// result which does not carry data.
 class CMergeDataConfig : public OptDataConfig<handshake::ControlMergeOp> {
 public:
-  CMergeDataConfig(handshake::ControlMergeOp op) : OptDataConfig(op) {};
+  CMergeDataConfig(handshake::ControlMergeOp op) : OptDataConfig(op){};
 
   SmallVector<Value> getDataResults() override {
     return SmallVector<Value>{op.getResult()};
@@ -545,7 +545,7 @@ public:
 /// which does not carry data.
 class MuxDataConfig : public OptDataConfig<handshake::MuxOp> {
 public:
-  MuxDataConfig(handshake::MuxOp op) : OptDataConfig(op) {};
+  MuxDataConfig(handshake::MuxOp op) : OptDataConfig(op){};
 
   SmallVector<Value> getDataOperands() override { return op.getDataOperands(); }
 
@@ -562,7 +562,7 @@ public:
 /// condition operand which does not carry data.
 class CBranchDataConfig : public OptDataConfig<handshake::ConditionalBranchOp> {
 public:
-  CBranchDataConfig(handshake::ConditionalBranchOp op) : OptDataConfig(op) {};
+  CBranchDataConfig(handshake::ConditionalBranchOp op) : OptDataConfig(op){};
 
   SmallVector<Value> getDataOperands() override {
     return SmallVector<Value>{op.getDataOperand()};
@@ -582,7 +582,7 @@ public:
 class BufferDataConfig : public OptDataConfig<handshake::BufferOp> {
 public:
   BufferDataConfig(handshake::BufferOp op)
-      : OptDataConfig<handshake::BufferOp>(op) {};
+      : OptDataConfig<handshake::BufferOp>(op){};
 
   SmallVector<Value> getDataOperands() override {
     return SmallVector<Value>{this->op.getOperand()};
@@ -909,14 +909,18 @@ struct MemInterfaceAddrOpt
         addrResultIndices.push_back(stAddrIdx);
         newResultTypes[stAddrIdx] = optAddrType;
       } else {
-        std::optional<LSQLoadStorePort> lsqPort =
-            dyn_cast<LSQLoadStorePort>(port);
+        std::optional<OrderingUnitPorts> ouPort =
+            dyn_cast<OrderingUnitPorts>(port);
         // Load address and store address operands are modified
-        assert(lsqPort && "interface port must be to MC or LSQ");
-        unsigned ldAddrIdx = lsqPort->getLoadAddrInputIndex();
-        newOperands[ldAddrIdx] = getOptAddrInput(ldAddrIdx);
-        unsigned stAddrIdx = lsqPort->getStoreAddrInputIndex();
-        newOperands[stAddrIdx] = getOptAddrInput(stAddrIdx);
+        assert(ouPort && "interface port must be to MC or ordering unit");
+        for (unsigned i = 0; i < ouPort->getNumLoads(); ++i) {
+          unsigned ldAddrIdx = ouPort->getLoadAddrInputIndex(i);
+          newOperands[ldAddrIdx] = getOptAddrInput(ldAddrIdx);
+        }
+        for (unsigned i = 0; i < ouPort->getNumStores(); ++i) {
+          unsigned stAddrIdx = ouPort->getStoreAddrInputIndex(i);
+          newOperands[stAddrIdx] = getOptAddrInput(stAddrIdx);
+        }
       }
     }
 

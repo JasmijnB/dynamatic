@@ -803,7 +803,7 @@ ModuleDiscriminator::ModuleDiscriminator(FuncMemoryPorts &ports) {
   llvm::TypeSwitch<Operation *, void>(op)
       .Case<handshake::MemoryControllerOp>([&](auto) {
         // There can be at most one of those, and it is a load/store port
-        unsigned lsqPort = ports.getNumPorts<LSQLoadStorePort>();
+        unsigned lsqPort = ports.getNumPorts<OrderingUnitPorts>();
 
         Type dataType = IntegerType::get(ctx, ports.dataWidth);
         Type addrType = IntegerType::get(ctx, ports.addrWidth);

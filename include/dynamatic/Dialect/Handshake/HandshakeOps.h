@@ -77,8 +77,10 @@ public:
     STORE,
     /// MC load/store port (from dynamatic::handshake::MemoryControllerOp).
     MC_LOAD_STORE,
-    /// LSQ load/store port (from dynamatic::handshake::MemOrderingUnitOp),
-    LSQ_LOAD_STORE,
+    /// Ordering unit (LSQ or ordering network) load/store port (from
+    /// dynamatic::handshake::MemOrderingUnitOp), carrying N load and M store
+    /// channels.
+    ORDERING_UNIT,
   };
 
   /// The operation producing the memory input(s) the port refers to.
@@ -219,57 +221,99 @@ public:
 };
 
 /// Memory load/store port associated with a
-/// `dynamatic::handshake::MemOrderingUnitOp`, which acts as a "middle-person"
-/// between individual load/store IR operations and another memory interface
-/// (the one which this port is attached to). As both a load port and a store
-/// port, it references 4 values through their indices in the memory interface's
-/// inputs (3) and outputs (1).
-/// 1. The load address value produced by the LSQ and consumed by the memory
-/// interface (input).
-/// 2. The load data value produced by the memory interface and consumed by the
-/// LSQ (output).
-/// 3. The store address value produced by the LSQ and consumed by the memory
-/// interface (input).
-/// 4. The store data value produced by the LSQ and consumed by the memory
-/// interface (input).
-class LSQLoadStorePort : public MemoryPort {
+/// `dynamatic::handshake::MemOrderingUnitOp` (either an LSQ or an ordering
+/// network), carrying N load channels and M store channels between the ordering
+/// unit and the memory controller.
+/// Operand indices (in the memory interface's inputs):
+///   [0,   N)     load address inputs  (one per load port)
+///   [N,   N+M)   store address inputs (one per store port)
+///   [N+M, N+2M)  store data inputs    (one per store port)
+/// Result indices (in the memory interface's outputs):
+///   [0,   N)     load data outputs    (one per load port)
+/// For an LSQ, N=1 and M=1.
+class OrderingUnitPorts : public MemoryPort {
 public:
-  /// Constructs an LSQ load/store port from an LSQ operation, the index of the
-  /// LSQ's load address output in the memory interface's inputs (the store
-  /// address and store data inputs are assumed to follow), and the index of the
-  /// LSQ's load data input in the memory interface's results.
-  LSQLoadStorePort(dynamatic::handshake::MemOrderingUnitOp lsqOp,
-                   unsigned loadAddrInputIdx, unsigned loadDataOutputIdx);
+  /// Identifies the type of a signal in the operand list.
+  enum class SignalKind { LoadAddr, StoreAddr, StoreData };
+
+  /// Constructs the port from an ordering unit operation and the index arrays
+  /// for each channel group.
+  OrderingUnitPorts(dynamatic::handshake::MemOrderingUnitOp ouOp,
+                    ArrayRef<unsigned> loadAddrInputIndices,
+                    ArrayRef<unsigned> storeAddrInputIndices,
+                    ArrayRef<unsigned> storeDataInputIndices,
+                    ArrayRef<unsigned> loadDataOutputIndices);
 
   /// Default copy constructor.
-  LSQLoadStorePort(const LSQLoadStorePort &other) = default;
+  OrderingUnitPorts(const OrderingUnitPorts &other) = default;
 
   /// Copy-constructor from abstract memory port for LLVM-style RTTI.
-  LSQLoadStorePort(const MemoryPort &memPort) : MemoryPort(memPort){};
+  OrderingUnitPorts(const MemoryPort &memPort);
 
-  /// Returns the LSQ the port is associated to.
-  dynamatic::handshake::MemOrderingUnitOp getLSQOp() const;
+  /// Returns the ordering unit operation this port is associated with.
+  dynamatic::handshake::MemOrderingUnitOp getOrderingUnitOp() const;
 
-  /// Returns the index of the load address value in the memory interface's
-  /// inputs.
-  unsigned getLoadAddrInputIndex() const { return oprdIndices[0]; }
+  /// Returns the number of load channels.
+  unsigned getNumLoads() const { return numLoads; }
 
-  /// Returns the index of the load data value in the memory interface's
-  /// outputs.
-  unsigned getLoadDataOutputIndex() const { return resIndices[0]; }
+  /// Returns the number of store channels.
+  unsigned getNumStores() const { return numStores; }
 
-  /// Returns the index of the store address value in the memory interface's
-  /// inputs.
-  unsigned getStoreAddrInputIndex() const { return oprdIndices[1]; }
+  /// Returns the indices of all load address inputs.
+  ArrayRef<unsigned> getLoadAddrInputIndices() const {
+    return {oprdIndices.data(), numLoads};
+  }
 
-  /// Returns the index of the store data value in the memory interface's
-  /// inputs.
-  unsigned getStoreDataInputIndex() const { return oprdIndices[2]; }
+  /// Returns the indices of all store address inputs.
+  ArrayRef<unsigned> getStoreAddrInputIndices() const {
+    return {oprdIndices.data() + numLoads, numStores};
+  }
+
+  /// Returns the indices of all store data inputs.
+  ArrayRef<unsigned> getStoreDataInputIndices() const {
+    return {oprdIndices.data() + numLoads + numStores, numStores};
+  }
+
+  /// Returns the indices of all load data outputs.
+  ArrayRef<unsigned> getLoadDataOutputIndices() const {
+    return {resIndices.data(), resIndices.size()};
+  }
+
+  /// Returns the index of the i-th load address input.
+  unsigned getLoadAddrInputIndex(unsigned i) const { return oprdIndices[i]; }
+
+  /// Returns the index of the i-th store address input.
+  unsigned getStoreAddrInputIndex(unsigned i) const {
+    return oprdIndices[numLoads + i];
+  }
+
+  /// Returns the index of the i-th store data input.
+  unsigned getStoreDataInputIndex(unsigned i) const {
+    return oprdIndices[numLoads + numStores + i];
+  }
+
+  /// Returns the index of the i-th load data output.
+  unsigned getLoadDataOutputIndex(unsigned i) const { return resIndices[i]; }
+
+  /// Given an operand index, returns the signal kind and port index i, or
+  /// nullopt if the index does not belong to this port.
+  std::optional<std::pair<SignalKind, unsigned>>
+  lookupInputSignal(unsigned idx) const;
 
   /// Used by LLVM-style RTTI to establish `isa` relationships.
   static inline bool classof(const MemoryPort *port) {
-    return port->getKind() == Kind::LSQ_LOAD_STORE;
+    return port->getKind() == Kind::ORDERING_UNIT;
   }
+
+private:
+  unsigned numLoads;
+  unsigned numStores;
+
+  /// Maps each operand index to its signal kind and position within that kind.
+  DenseMap<unsigned, std::pair<SignalKind, unsigned>> signalMap;
+
+  /// Populates signalMap from oprdIndices using numLoads/numStores.
+  void buildSignalMap();
 };
 
 /// Memory load/store port associated with a
@@ -513,12 +557,13 @@ public:
   /// interface's inputs.
   mlir::SmallVector<MCBlock> getBlocks();
 
-  /// Determines whether the memory controller connects to an LSQ.
-  bool connectsToLSQ() const { return !interfacePorts.empty(); }
+  /// Determines whether the memory controller connects to an ordering unit
+  /// (LSQ or ordering network).
+  bool connectsToOrderingUnit() const { return !interfacePorts.empty(); }
 
-  /// Returns the memory controller's LSQ ports (which must exist, check with
-  /// `connectsToLSQ`).
-  LSQLoadStorePort getLSQPort() const;
+  /// Returns the memory controller's ordering unit ports (which must exist,
+  /// check with `connectsToOrderingUnit`).
+  OrderingUnitPorts getOrderingUnitPort() const;
 };
 
 /// Smart-pointer around a `dynamatic::GroupMemoryPorts`, specializing it for

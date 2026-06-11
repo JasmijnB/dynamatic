@@ -888,8 +888,9 @@ static LogicalResult getMCPorts(MCPorts &mcPorts) {
 
       // Add the port to the list of ports from other memory
       // interfaces
-      mcPorts.interfacePorts.push_back(
-          LSQLoadStorePort(lsqOp, input.index(), resIdx++));
+      unsigned ldAddrIdx = input.index();
+      mcPorts.interfacePorts.push_back(OrderingUnitPorts(
+          lsqOp, {ldAddrIdx}, {ldAddrIdx + 1}, {ldAddrIdx + 2}, {resIdx++}));
       return success();
     };
 
@@ -950,12 +951,13 @@ LogicalResult MemoryControllerOp::verify() {
   if (failed(getMCPorts(mcPorts)) || failed(verifyMemOp(mcPorts)))
     return failure();
 
-  // If there is a port to another memory interface it must be to an LSQ
+  // If there is a port to another memory interface it must be to an ordering
+  // unit (LSQ or ordering network)
   if (!mcPorts.interfacePorts.empty()) {
-    if (!isa<LSQLoadStorePort>(mcPorts.interfacePorts.front()))
+    if (!isa<OrderingUnitPorts>(mcPorts.interfacePorts.front()))
       return emitError()
              << "The only memory interface port the memory controller "
-                "supports is to an LSQ.";
+                "supports is to an ordering unit.";
   }
   return success();
 }
@@ -1479,14 +1481,46 @@ handshake::StoreOp StorePort::getStoreOp() const {
   return cast<handshake::StoreOp>(portOp);
 }
 
-LSQLoadStorePort::LSQLoadStorePort(
-    dynamatic::handshake::MemOrderingUnitOp lsqOp, unsigned loadAddrInputIdx,
-    unsigned loadDataOutputIdx)
-    : MemoryPort(lsqOp,
-                 {loadAddrInputIdx, loadAddrInputIdx + 1, loadAddrInputIdx + 2},
-                 {loadDataOutputIdx}, Kind::LSQ_LOAD_STORE) {}
+OrderingUnitPorts::OrderingUnitPorts(
+    dynamatic::handshake::MemOrderingUnitOp ouOp,
+    ArrayRef<unsigned> loadAddrInputIndices,
+    ArrayRef<unsigned> storeAddrInputIndices,
+    ArrayRef<unsigned> storeDataInputIndices,
+    ArrayRef<unsigned> loadDataOutputIndices)
+    : MemoryPort(ouOp, {}, loadDataOutputIndices, Kind::ORDERING_UNIT),
+      numLoads(loadAddrInputIndices.size()),
+      numStores(storeAddrInputIndices.size()) {
+  llvm::append_range(oprdIndices, loadAddrInputIndices);
+  llvm::append_range(oprdIndices, storeAddrInputIndices);
+  llvm::append_range(oprdIndices, storeDataInputIndices);
+  buildSignalMap();
+}
 
-handshake::MemOrderingUnitOp LSQLoadStorePort::getLSQOp() const {
+OrderingUnitPorts::OrderingUnitPorts(const MemoryPort &memPort)
+    : MemoryPort(memPort) {
+  numLoads = resIndices.size();
+  numStores = (oprdIndices.size() - numLoads) / 2;
+  buildSignalMap();
+}
+
+void OrderingUnitPorts::buildSignalMap() {
+  for (unsigned i = 0; i < numLoads; ++i)
+    signalMap[oprdIndices[i]] = {SignalKind::LoadAddr, i};
+  for (unsigned i = 0; i < numStores; ++i)
+    signalMap[oprdIndices[numLoads + i]] = {SignalKind::StoreAddr, i};
+  for (unsigned i = 0; i < numStores; ++i)
+    signalMap[oprdIndices[numLoads + numStores + i]] = {SignalKind::StoreData, i};
+}
+
+std::optional<std::pair<OrderingUnitPorts::SignalKind, unsigned>>
+OrderingUnitPorts::lookupInputSignal(unsigned idx) const {
+  auto it = signalMap.find(idx);
+  if (it == signalMap.end())
+    return std::nullopt;
+  return it->second;
+}
+
+handshake::MemOrderingUnitOp OrderingUnitPorts::getOrderingUnitOp() const {
   return cast<handshake::MemOrderingUnitOp>(portOp);
 }
 
@@ -1643,12 +1677,12 @@ SmallVector<MCBlock> MCPorts::getBlocks() {
   return mcBlocks;
 }
 
-LSQLoadStorePort MCPorts::getLSQPort() const {
-  assert(connectsToLSQ() && "no LSQ connected");
-  std::optional<LSQLoadStorePort> lsqPort =
-      dyn_cast<LSQLoadStorePort>(interfacePorts.front());
-  assert(lsqPort && "lsq load/store port undefined");
-  return *lsqPort;
+OrderingUnitPorts MCPorts::getOrderingUnitPort() const {
+  assert(connectsToOrderingUnit() && "no ordering unit connected");
+  std::optional<OrderingUnitPorts> ouPort =
+      dyn_cast<OrderingUnitPorts>(interfacePorts.front());
+  assert(ouPort && "ordering unit port undefined");
+  return *ouPort;
 }
 
 LSQGroup::LSQGroup(GroupMemoryPorts *group, unsigned groupID)

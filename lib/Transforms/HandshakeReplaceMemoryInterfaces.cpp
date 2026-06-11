@@ -174,8 +174,8 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::replaceForMemRef(
 
     // There may still be an LSQ slave interface, look for it
     MCPorts ports = mcOp.getPorts();
-    if (ports.connectsToLSQ())
-      lsqOp = ports.getLSQPort().getLSQOp();
+    if (ports.connectsToOrderingUnit())
+      lsqOp = ports.getOrderingUnitPort().getOrderingUnitOp();
   }
 
   // Context and builder for creating new operation
@@ -327,11 +327,11 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::updateMemoryAccessMarks(
         setDialectAttr<MemInterfaceAttr>(port.portOp, ctx);
     }
     // Nothing else to do if the region has no LSQ
-    if (!mcPorts.connectsToLSQ()) {
-      LLVM_DEBUG(llvm::dbgs() << "\tNo LSQ interface for the region\n");
+    if (!mcPorts.connectsToOrderingUnit()) {
+      LLVM_DEBUG(llvm::dbgs() << "\tNo ordering unit interface for the region\n");
       return success();
     }
-    lsqOp = mcPorts.getLSQPort().getLSQOp();
+    lsqOp = mcPorts.getOrderingUnitPort().getOrderingUnitOp();
   }
 
   DenseSet<Operation *> lsqAccessOps;
