@@ -64,12 +64,6 @@ class OrderingNetworkWrapper:
         assert (
             self.numGroups == 1
         ), "The ordering network only supports a single group for now"
-        assert (
-            self.numLoads == 1
-        ), "The ordering network only supports a single load port for now"
-        assert (
-            self.numStores == 1
-        ), "The ordering network only supports a single store port for now"
 
     # ------------------------------------------------------------------
     # Helper: build the mangled structure-module port name

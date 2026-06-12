@@ -902,12 +902,16 @@ struct MemInterfaceAddrOpt
         // Load address and store address results are modified
         Type optAddrType =
             handshake::ChannelType::get(rewriter.getIntegerType(optWidth));
-        unsigned ldAddrIdx = mcPort->getLoadAddrOutputIndex();
-        addrResultIndices.push_back(ldAddrIdx);
-        newResultTypes[ldAddrIdx] = optAddrType;
-        unsigned stAddrIdx = mcPort->getStoreAddrOutputIndex();
-        addrResultIndices.push_back(stAddrIdx);
-        newResultTypes[stAddrIdx] = optAddrType;
+        for (unsigned i = 0; i < mcPort->getNumLoads(); ++i) {
+          unsigned ldAddrIdx = mcPort->getLoadAddrOutputIndex(i);
+          addrResultIndices.push_back(ldAddrIdx);
+          newResultTypes[ldAddrIdx] = optAddrType;
+        }
+        for (unsigned i = 0; i < mcPort->getNumStores(); ++i) {
+          unsigned stAddrIdx = mcPort->getStoreAddrOutputIndex(i);
+          addrResultIndices.push_back(stAddrIdx);
+          newResultTypes[stAddrIdx] = optAddrType;
+        }
       } else {
         std::optional<OrderingUnitPorts> ouPort =
             dyn_cast<OrderingUnitPorts>(port);

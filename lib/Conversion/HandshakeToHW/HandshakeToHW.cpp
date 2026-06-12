@@ -802,8 +802,14 @@ ModuleDiscriminator::ModuleDiscriminator(FuncMemoryPorts &ports) {
   MLIRContext *ctx = op->getContext();
   llvm::TypeSwitch<Operation *, void>(op)
       .Case<handshake::MemoryControllerOp>([&](auto) {
-        // There can be at most one of those, and it is a load/store port
-        unsigned lsqPort = ports.getNumPorts<OrderingUnitPorts>();
+        // Sum loads and stores contributed by each connected ordering unit
+        unsigned ouLoads = 0, ouStores = 0;
+        for (const MemoryPort &port : ports.interfacePorts) {
+          if (auto ouPort = dyn_cast<OrderingUnitPorts>(port)) {
+            ouLoads += ouPort->getNumLoads();
+            ouStores += ouPort->getNumStores();
+          }
+        }
 
         Type dataType = IntegerType::get(ctx, ports.dataWidth);
         Type addrType = IntegerType::get(ctx, ports.addrWidth);
@@ -811,8 +817,8 @@ ModuleDiscriminator::ModuleDiscriminator(FuncMemoryPorts &ports) {
         // Control port count, load port count, store port count, data
         // bitwidth, and address bitwidth
         addUnsigned("NUM_CONTROLS", ports.getNumPorts<ControlPort>());
-        addUnsigned("NUM_LOADS", ports.getNumPorts<LoadPort>() + lsqPort);
-        addUnsigned("NUM_STORES", ports.getNumPorts<StorePort>() + lsqPort);
+        addUnsigned("NUM_LOADS", ports.getNumPorts<LoadPort>() + ouLoads);
+        addUnsigned("NUM_STORES", ports.getNumPorts<StorePort>() + ouStores);
         addType("DATA_TYPE", ChannelType::get(dataType));
         addType("ADDR_TYPE", ChannelType::get(addrType));
       })

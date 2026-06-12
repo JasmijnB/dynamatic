@@ -53,6 +53,7 @@ void MemoryInterfaceBuilder::addLSQPort(unsigned group,
     ++lsqNumLoads;
   } else {
     assert(isa<handshake::StoreOp>(portOp) && "invalid LSQ port");
+    ++lsqNumStores;
   }
   lsqPorts[group].push_back(portOp);
 }
@@ -111,39 +112,61 @@ LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
     // so that the LSQ can forward its loads and stores to the MC. We need
     // load address, store address, and store data channels from the LSQ to
     // the MC and a load data channel from the MC to the LSQ
+    unsigned nLoads, nStores;
+
+    if (orderingKind == handshake::MemOrderingKind::LSQ) {
+      nLoads = nStores = 1;
+    } else {
+      nLoads = lsqNumLoads;
+      nStores = lsqNumStores;
+    }
+
     MemRefType memrefType = memref.getType().cast<MemRefType>();
 
-    // Create 3 backedges (load address, store address, store data) for the MC
-    // inputs that will eventually come from the LSQ.
+    // Create nLoads+nStores+nStores backedges for the MC inputs coming from the
+    // OU: one load address per load, one store address and store data per store.
     MLIRContext *ctx = builder.getContext();
     Type addrType = handshake::ChannelType::getAddrChannel(ctx);
-    Backedge ldAddr = edgeBuilder.get(addrType);
-    Backedge stAddr = edgeBuilder.get(addrType);
-    Backedge stData = edgeBuilder.get(
-        handshake::ChannelType::get(memrefType.getElementType()));
-    inputs.mcInputs.push_back(ldAddr);
-    inputs.mcInputs.push_back(stAddr);
-    inputs.mcInputs.push_back(stData);
+    Type dataType =
+        handshake::ChannelType::get(memrefType.getElementType());
+    std::vector<Backedge> ldAddrs, stAddrs, stDatas;
+    for (unsigned i = 0; i < nLoads; ++i)
+      ldAddrs.push_back(edgeBuilder.get(addrType));
+    for (unsigned i = 0; i < nStores; ++i) {
+      stAddrs.push_back(edgeBuilder.get(addrType));
+      stDatas.push_back(edgeBuilder.get(dataType));
+    }
+    for (Backedge &e : ldAddrs)
+      inputs.mcInputs.push_back(e);
+    for (Backedge &e : stAddrs)
+      inputs.mcInputs.push_back(e);
+    for (Backedge &e : stDatas)
+      inputs.mcInputs.push_back(e);
 
-    // Create the memory controller, adding 1 to its load count so that it
-    // generates a load data result for the LSQ
+    // Create the memory controller, adding nLoads to its load count so that it
+    // generates a load data result for each OU load
     mcOp = builder.create<handshake::MemoryControllerOp>(
         loc, memref, memStart, inputs.mcInputs, ctrlEnd, inputs.mcBlocks,
-        mcNumLoads + 1);
+        mcNumLoads + nLoads);
 
-    // Add the MC's load data result to the LSQ's inputs and create the LSQ,
-    // passing a flag to the builder so that it generates the necessary
-    // outputs that will go to the MC
-    inputs.lsqInputs.push_back(mcOp.getOutputs().back());
+    // Add the MC's load data results to the OU's inputs and create the OU,
+    // passing nLoads and nStores so it generates the necessary interface outputs
+    ValueRange mcOutputs = mcOp.getOutputs();
+    for (unsigned i = 0; i < nLoads; ++i)
+      inputs.lsqInputs.push_back(mcOutputs[mcNumLoads + i]);
     lsqOp = builder.create<handshake::MemOrderingUnitOp>(
         loc, mcOp, inputs.lsqInputs, inputs.lsqGroupSizes, lsqNumLoads,
-        orderingKind);
+        nStores, orderingKind);
 
-    // Resolve the backedges to fully connect the MC and LSQ
-    ValueRange lsqMemResults = lsqOp.getOutputs().take_back(3);
-    ldAddr.setValue(lsqMemResults[0]);
-    stAddr.setValue(lsqMemResults[1]);
-    stData.setValue(lsqMemResults[2]);
+    // Resolve the backedges to fully connect the MC and OU
+    ValueRange lsqMemResults =
+        lsqOp.getOutputs().take_back(nLoads + 2 * nStores);
+    for (unsigned i = 0; i < nLoads; ++i)
+      ldAddrs[i].setValue(lsqMemResults[i]);
+    for (unsigned i = 0; i < nStores; ++i)
+      stAddrs[i].setValue(lsqMemResults[nLoads + i]);
+    for (unsigned i = 0; i < nStores; ++i)
+      stDatas[i].setValue(lsqMemResults[nLoads + nStores + i]);
   }
 
   // At this point, all load ports are missing their second operand which is the
