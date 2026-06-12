@@ -124,11 +124,11 @@ LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
     MemRefType memrefType = memref.getType().cast<MemRefType>();
 
     // Create nLoads+nStores+nStores backedges for the MC inputs coming from the
-    // OU: one load address per load, one store address and store data per store.
+    // OU: one load address per load, one store address and store data per
+    // store.
     MLIRContext *ctx = builder.getContext();
     Type addrType = handshake::ChannelType::getAddrChannel(ctx);
-    Type dataType =
-        handshake::ChannelType::get(memrefType.getElementType());
+    Type dataType = handshake::ChannelType::get(memrefType.getElementType());
     std::vector<Backedge> ldAddrs, stAddrs, stDatas;
     for (unsigned i = 0; i < nLoads; ++i)
       ldAddrs.push_back(edgeBuilder.get(addrType));
@@ -150,13 +150,14 @@ LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
         mcNumLoads + nLoads);
 
     // Add the MC's load data results to the OU's inputs and create the OU,
-    // passing nLoads and nStores so it generates the necessary interface outputs
+    // passing nLoads and nStores so it generates the necessary interface
+    // outputs
     ValueRange mcOutputs = mcOp.getOutputs();
     for (unsigned i = 0; i < nLoads; ++i)
       inputs.lsqInputs.push_back(mcOutputs[mcNumLoads + i]);
     lsqOp = builder.create<handshake::MemOrderingUnitOp>(
-        loc, mcOp, inputs.lsqInputs, inputs.lsqGroupSizes, lsqNumLoads,
-        nStores, orderingKind);
+        loc, mcOp, inputs.lsqInputs, inputs.lsqGroupSizes, lsqNumLoads, nStores,
+        orderingKind);
 
     // Resolve the backedges to fully connect the MC and OU
     ValueRange lsqMemResults =
@@ -502,8 +503,8 @@ OrderingNetworkGenerationInfo::OrderingNetworkGenerationInfo(
 
 void OrderingNetworkGenerationInfo::fromPorts(FuncMemoryPorts &ports) {
   // TODO: Calculate depth better
-  const unsigned depthLoad = 4;
-  const unsigned depthStore = 4;
+  const unsigned depthLoad = 16;
+  const unsigned depthStore = 16;
 
   // Assign a global port index to each access port (in program order across
   // all groups) and build the vertex→group mapping.
