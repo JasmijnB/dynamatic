@@ -148,10 +148,15 @@ class Structure(Generator):
             dst_queue_idx = config.ports_to_queue[dst_port]
             key = (src_queue_idx, dst_queue_idx)
             if key not in dc_def_map:
+                dc_config = config.dependency_checkers[edge_idx]
+                dc_config.pq = config.queues[src_queue_idx]
+                dc_config.sq = config.queues[dst_queue_idx]
+                dc_config.pq_bb = config.port_bb_ids[src_port]
+                dc_config.sq_bb = config.port_bb_ids[dst_port]
                 dc_def = DependencyChecker(
                     name=f"dependency_checker_{edge_idx}",
                     suffix="",
-                    configs=config.dependency_checkers[edge_idx],
+                    configs=dc_config
                 )
                 dc_def.generate(em.new(), path_rtl=out_path, out_file=out_file)
                 dc_def_map[key] = dc_def

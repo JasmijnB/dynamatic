@@ -11,6 +11,8 @@ class QueueConfig:
     id_val: int = 0
     q_addr_width: int = 2
     st_resp: bool = False
+    is_succ = False
+    is_pred = False
 
     def __init__(self, config: dict):
         self.q_type = config["QueueType"]
@@ -45,16 +47,20 @@ class QueueConfig:
 class DependencyCheckerConfig:
     pq: "QueueConfig"
     sq: "QueueConfig"
+    pq_bb: int
+    sq_bb: int
     succ_can_execute_once: bool = (
         False  # Whether this dependency checker checks for dependencies in reverse order
     )
     access_disparity_width: int = 4
 
     def __init__(
-        self, config: dict, pq: "QueueConfig" = None, sq: "QueueConfig" = None
+        self, config: dict, pq: "QueueConfig" = None, sq: "QueueConfig" = None, pq_bb: int = None, sq_bb: int = None
     ):
         self.pq = pq
         self.sq = sq
+        self.pq_bb = pq_bb
+        self.sq_bb = sq_bb
         self.succ_can_execute_once = config.get("succCanExecuteOnce")
         self.access_disparity_width = config.get("AccessDisparityWidth")
 
@@ -88,9 +94,8 @@ class OrderingNetworkConfig:
         self.port_bb_ids = config["portBBIds"]
         self.ports_to_queue = config["portsToQueue"]
         self.queues = [QueueConfig(q) for q in config["queues"]]
-        pq, sq = self.queues[0], self.queues[1]
         self.dependency_checkers = [
-            DependencyCheckerConfig(dc, pq, sq) for dc in config["dependencyCheckers"]
+            DependencyCheckerConfig(dc) for dc in config["dependencyCheckers"]
         ]
 
     @staticmethod
