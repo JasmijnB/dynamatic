@@ -89,12 +89,25 @@ class QueueInstance:
 
 
 class DependencyCheckerInstance:
-    def __init__(self, dp_def, pred: QueueInstance, succ: QueueInstance):
+    def __init__(
+        self,
+        dp_def,
+        pred: QueueInstance,
+        succ: QueueInstance,
+        pq_bb: int,
+        sq_bb: int,
+    ):
         self.pred = pred
         self.succ = succ
         self.ports = dp_def.get_ports()
         self.port_vars = {}
         self.dp_def = dp_def
+        # BBs of this specific edge. The dp_def is shared across all edges with
+        # the same (pred queue, succ queue) pair, so its config's pq_bb/sq_bb
+        # only reflect the first such edge; the BB handshake routing must use
+        # these per-instance values instead.
+        self.pq_bb = pq_bb
+        self.sq_bb = sq_bb
 
     def connect_ports(self, port_name, map, queue, em):
         signal_type = self.ports[port_name].type
@@ -139,7 +152,9 @@ class Structure(Generator):
             q_config = copy(config.queues[queue_config_idx])
             q_config.is_pred = port_idx in pred_ports
             q_config.is_succ = port_idx in succ_ports
-            q_def = Queue(name=f"queue_{port_idx}", suffix="", configs=q_config)
+            q_def = Queue(
+                name=f"{self.name}_queue_{port_idx}", suffix="", configs=q_config
+            )
             q_def.generate(em.new(), path_rtl=out_path, out_file=out_file)
             queue_defs[port_idx] = q_def
 
@@ -158,7 +173,7 @@ class Structure(Generator):
                 dc_config.pq_bb = config.port_bb_ids[src_port]
                 dc_config.sq_bb = config.port_bb_ids[dst_port]
                 dc_def = DependencyChecker(
-                    name=f"dependency_checker_{edge_idx}",
+                    name=f"{self.name}_dependency_checker_{edge_idx}",
                     suffix="",
                     configs=dc_config
                 )
@@ -254,6 +269,8 @@ class Structure(Generator):
                 dc_def_map[key],
                 queue_instances[src_port],
                 queue_instances[dst_port],
+                config.port_bb_ids[src_port],
+                config.port_bb_ids[dst_port],
             )
             dp_checker.init_port_vars(em)
             dp_checkers.append(dp_checker)
@@ -283,10 +300,9 @@ class Structure(Generator):
         """
         bb_to_dc_ports = defaultdict(list)  # bb_id -> [(dp_checker, prefix)]
         for dp_checker in dp_checkers:
-            dc_config = dp_checker.dp_def.configs
-            if dc_config.pq_bb != dc_config.sq_bb:
-                bb_to_dc_ports[dc_config.pq_bb].append((dp_checker, "pq"))
-                bb_to_dc_ports[dc_config.sq_bb].append((dp_checker, "sq"))
+            if dp_checker.pq_bb != dp_checker.sq_bb:
+                bb_to_dc_ports[dp_checker.pq_bb].append((dp_checker, "pq"))
+                bb_to_dc_ports[dp_checker.sq_bb].append((dp_checker, "sq"))
 
         dc_ready_wires = {}  # (id(dp_checker), prefix) -> Logic "w" wire
         for bb_id, pairs in sorted(bb_to_dc_ports.items()):

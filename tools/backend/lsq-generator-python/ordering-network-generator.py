@@ -254,8 +254,8 @@ class OrderingNetworkWrapper:
         # ---- Group (BB) handshake: forward io_ctrl to the structure's cross-BB
         # bb_valid/bb_ready ports. io_ctrl index == BB id (see __init__).
         for bb_id in sorted(self.cross_bb_ids):
-            em.add_map(f"bb_valid_{bb_id}", io_ctrl_valid[bb_id].getNameRead())
-            em.add_map(f"bb_ready_{bb_id}", io_ctrl_ready[bb_id].getNameWrite())
+            em.add_map(f"bb_valid_{bb_id}_i", io_ctrl_valid[bb_id].getNameRead())
+            em.add_map(f"bb_ready_{bb_id}_o", io_ctrl_ready[bb_id].getNameWrite())
 
         ld_counter = 0
         st_counter = 0
