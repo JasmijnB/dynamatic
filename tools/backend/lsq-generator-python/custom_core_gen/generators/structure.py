@@ -57,9 +57,12 @@ class QueueInstance:
         self.port_vars = defaultdict(list)
         self.successors = []
 
-    def init_port_vars(self, universal_vars):
+    def init_port_vars(self, universal_vars, group_slot):
+        # group_slot is this queue's position within its config's universal
+        # arrays (those are sized per config). It is only an array offset, not
+        # the queue's identity: self.num is globally unique across all queues.
         for port, signal in universal_vars.items():
-            self.port_vars[port] = [signal[self.num]]
+            self.port_vars[port] = [signal[group_slot]]
 
     def instantiate(self, em, defaults):
         # transform port_vars
@@ -244,17 +247,17 @@ class Structure(Generator):
                         f"Unsupported signal type {type(signal)} for port {port}"
                     )
 
-        # Create one QueueInstance per port
+        # Create one QueueInstance per port. Each queue gets a globally unique
+        # index (its port index) for naming; the per-config array slot is a
+        # separate local offset used only to index the universal arrays.
         queue_instances = {}
         group_counters = defaultdict(int)
         for port_idx, queue_config_idx in enumerate(config.ports_to_queue):
             queue_type = config.queues[queue_config_idx].q_type
-            within_group_idx = group_counters[queue_config_idx]
+            group_slot = group_counters[queue_config_idx]
             group_counters[queue_config_idx] += 1
-            q_instance = QueueInstance(
-                queue_defs[port_idx], within_group_idx, queue_type
-            )
-            q_instance.init_port_vars(universal_vars[queue_config_idx])
+            q_instance = QueueInstance(queue_defs[port_idx], port_idx, queue_type)
+            q_instance.init_port_vars(universal_vars[queue_config_idx], group_slot)
             queue_instances[port_idx] = q_instance
 
         # Create DependencyCheckerInstances
