@@ -338,6 +338,7 @@ INSTANTIATE_TEST_SUITE_P(
       "histogram",
       "insertion_sort",
       "jacobi_1d_imper",
+      "jacobi_1d",
       "kernel_2mm",
       "kernel_2mm_float",
       "kernel_3mm",
