@@ -1073,22 +1073,27 @@ void MemOrderingUnitOp::build(OpBuilder &odsBuilder, OperationState &odsState,
 void MemOrderingUnitOp::build(OpBuilder &odsBuilder, OperationState &odsState,
                               handshake::MemoryControllerOp mcOp,
                               ValueRange inputs, ArrayRef<unsigned> groupSizes,
-                              unsigned numLoads, unsigned numStores,
+                              unsigned numCircuitLoads, unsigned numMCLoads,
+                              unsigned numMCStores,
                               handshake::MemOrderingKind memOrderingKind) {
   // Memory operands
   odsState.addOperands(inputs);
 
-  // Data outputs (get their type from memref)
+  // One data output to the circuit per load access port.
   MemRefType memrefType = mcOp.getMemRefType();
   MLIRContext *ctx = odsBuilder.getContext();
   Type dataType = wrapChannel(memrefType.getElementType());
-  odsState.types.append(numLoads, dataType);
+  odsState.types.append(numCircuitLoads, dataType);
 
-  // Add results for N load addresses, M store addresses, and M store data
+  // Memory-controller interface results: one address per MC load channel, plus
+  // one address and one data result per MC store channel. The number of MC
+  // channels is independent of the number of circuit-facing ports: an LSQ
+  // arbitrates all of its accesses through a single load/store channel, while
+  // an ordering network exposes one channel per port.
   Type addrType = handshake::ChannelType::getAddrChannel(ctx);
-  odsState.types.append(numLoads, addrType);
-  odsState.types.append(numStores, addrType);
-  odsState.types.append(numStores, dataType);
+  odsState.types.append(numMCLoads, addrType);
+  odsState.types.append(numMCStores, addrType);
+  odsState.types.append(numMCStores, dataType);
 
   // The LSQ is a slave interface in this case (the MC is the master), so it
   // doesn't produce a completion signal
@@ -1242,10 +1247,12 @@ static LogicalResult getLSQPorts(LSQPorts &lsqPorts) {
     };
 
     auto handleMC = [&](handshake::MemoryControllerOp mcOp) -> LogicalResult {
-      // Consume all consecutive MC load-data inputs (one per OU load forwarded
-      // through this MC). They appear together at the end of the OU operand
-      // list.
+      // Consume all consecutive MC load-data inputs. There is one per MC load
+      // *channel* (not per circuit-facing load port): an LSQ arbitrates all of
+      // its loads through a single MC channel, while an ordering network has one
+      // channel per load. They appear together at the end of the OU operands.
       unsigned firstOprdIdx = cur.index();
+      unsigned nMCLoads = 0;
       while (currentIt != iterEnd) {
         auto elem = *currentIt;
         if (elem.index() >= lastIterOprd)
@@ -1254,12 +1261,14 @@ static LogicalResult getLSQPorts(LSQPorts &lsqPorts) {
           break;
         if (failed(checkAndSetBitwidth(elem.value(), lsqPorts.dataWidth)))
           return failure();
+        ++nMCLoads;
         ++currentIt;
       }
-      // At this point resIdx == total loads processed == nMCLoads.
-      // Total OU results == 2*nMCLoads + 2*nMCStores, so derive nMCStores.
-      unsigned nMCLoads = resIdx;
-      unsigned nMCStores = (lsqPorts.memOp->getNumResults() - 2 * nMCLoads) / 2;
+      // The OU's results are the circuit-facing load data (resIdx of them, one
+      // per load port, already processed) followed by the MC interface results:
+      // nMCLoads load addresses, then nMCStores store addresses and store data.
+      unsigned remainingResults = lsqPorts.memOp->getNumResults() - resIdx;
+      unsigned nMCStores = (remainingResults - nMCLoads) / 2;
       // Check load address, store address, and store data result types.
       for (unsigned i = 0; i < nMCLoads; ++i)
         if (failed(checkAndSetBitwidth(memResults[resIdx + i],
@@ -1319,6 +1328,38 @@ static LogicalResult getLSQPorts(LSQPorts &lsqPorts) {
   if (nextGroupIdx != groupSizes.size())
     return lsqPorts.memOp->emitError()
            << "LSQ declares more groups than it connects to.";
+
+  // A slave interface with only store ports never produces an MC-driven operand
+  // (the MC only feeds back load data), so the operand loop above never reaches
+  // handleMC and the store address/data results sent to the MC stay
+  // unaccounted. Register the store-only MC interface port explicitly here.
+  // (handleMC handles every case where at least one load is present.)
+  if (lsqPorts.interfacePorts.empty() && !lsqPorts.memOp.isMasterInterface()) {
+    handshake::MemoryControllerOp mcOp = lsqPorts.getLSQOp().getConnectedMC();
+    if (!mcOp)
+      return lsqPorts.memOp->emitError()
+             << "LSQ is a slave interface but its memory controller could not "
+                "be identified.";
+    // Remaining results are [stAddr_0..stAddr_{M-1}, stData_0..stData_{M-1}].
+    unsigned remaining = memResults.size() - resIdx;
+    if (remaining % 2 != 0)
+      return lsqPorts.memOp->emitError()
+             << "Store-only LSQ expects an even number of memory-controller "
+                "results (one address and one data result per store).";
+    unsigned nMCStores = remaining / 2;
+    for (unsigned i = 0; i < nMCStores; ++i)
+      if (failed(
+              checkAndSetBitwidth(memResults[resIdx + i], lsqPorts.addrWidth)))
+        return failure();
+    for (unsigned i = 0; i < nMCStores; ++i)
+      if (failed(checkAndSetBitwidth(memResults[resIdx + nMCStores + i],
+                                     lsqPorts.dataWidth)))
+        return failure();
+    lsqPorts.interfacePorts.push_back(MCLoadStorePort(
+        mcOp, resIdx, /*nLoads=*/0, nMCStores, /*firstOprdIdx=*/0));
+    resIdx += 2 * nMCStores;
+  }
+
   // Check that all memory results have been accounted for
   unsigned expectedResIdx = memResults.size();
   if (lsqPorts.memOp.isMasterInterface())

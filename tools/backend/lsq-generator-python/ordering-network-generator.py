@@ -31,7 +31,7 @@ class OrderingNetworkWrapper:
       | io_stAddrToMC_M_bits                | mem_addr_o_q1_array_M                      |
       | io_ldDataFromMC_N_bits              | mem_data_i_q0_array_N                      |
       | io_ldAddrToMC_N_bits                | mem_addr_o_q0_array_N                      |
-      | io_ctrl_G_(ready|valid)             | (always-ready, not forwarded to structure)  |
+      | io_ctrl_G_(valid|ready)             | bb_(valid_G_i|ready_G_o) for cross-BB groups; else always-ready |
     """
 
     def __init__(self, path_rtl: str, config: OrderingNetworkConfig):
@@ -61,9 +61,19 @@ class OrderingNetworkWrapper:
             1 for p in config.ports_to_queue if config.queues[p].q_type == "store"
         )
         self.numGroups = len(set(config.port_bb_ids))
-        assert (
-            self.numGroups == 1
-        ), "The ordering network only supports a single group for now"
+
+        # Group index in io_ctrl is the BB id directly (BBs are numbered
+        # 0..numGroups-1, matching the LSQ group_init convention). Only BBs that
+        # take part in a cross-BB dependency checker get bb_valid/bb_ready ports
+        # on the structure module (mirrors Structure._route_bb_ports); the other
+        # groups stay always-ready.
+        self.cross_bb_ids = set()
+        for src_port, dst_port in zip(config.edge_src, config.edge_dst):
+            src_bb = config.port_bb_ids[src_port]
+            dst_bb = config.port_bb_ids[dst_port]
+            if src_bb != dst_bb:
+                self.cross_bb_ids.add(src_bb)
+                self.cross_bb_ids.add(dst_bb)
 
     # ------------------------------------------------------------------
     # Helper: build the mangled structure-module port name
@@ -88,7 +98,9 @@ class OrderingNetworkWrapper:
         io_ctrl_ready = LogicArray(
             em, "io_ctrl_ready", "o", self.numGroups, dyn_comp=True
         )
-        LogicArray(em, "io_ctrl_valid", "i", self.numGroups, dyn_comp=True)
+        io_ctrl_valid = LogicArray(
+            em, "io_ctrl_valid", "i", self.numGroups, dyn_comp=True
+        )
 
         # ---- Per-load circuit-facing IOs ----
         io_ldAddr_ready = LogicArray(
@@ -185,9 +197,11 @@ class OrderingNetworkWrapper:
         empty_ld = [Logic(em, f"empty_ld_{i}", "w") for i in range(self.numLoads)]
         empty_st = [Logic(em, f"empty_st_{i}", "w") for i in range(self.numStores)]
 
-        # ---- io_ctrl: always accept ----
+        # ---- io_ctrl: groups without a cross-BB dependency always accept; the
+        # rest are driven by the structure's bb_ready ports during instantiation.
         for i in range(self.numGroups):
-            em.add_assignment(io_ctrl_ready[i], Bit(1))
+            if i not in self.cross_bb_ids:
+                em.add_assignment(io_ctrl_ready[i], Bit(1))
 
         # ---- Per-store register processes ----
         for i in range(self.numStores):
@@ -236,6 +250,12 @@ class OrderingNetworkWrapper:
         em.start_instantiation(self.core_name)
         em.add_map("rst", "rst")
         em.add_map("clk", "clk")
+
+        # ---- Group (BB) handshake: forward io_ctrl to the structure's cross-BB
+        # bb_valid/bb_ready ports. io_ctrl index == BB id (see __init__).
+        for bb_id in sorted(self.cross_bb_ids):
+            em.add_map(f"bb_valid_{bb_id}", io_ctrl_valid[bb_id].getNameRead())
+            em.add_map(f"bb_ready_{bb_id}", io_ctrl_ready[bb_id].getNameWrite())
 
         ld_counter = 0
         st_counter = 0

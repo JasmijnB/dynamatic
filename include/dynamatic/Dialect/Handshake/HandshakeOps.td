@@ -1023,7 +1023,8 @@ def MemOrderingUnitOp : Handshake_Op<"lsq", [
                    "::dynamatic::handshake::MemOrderingKind":$orderingKind)>,
     OpBuilder<(ins "::dynamatic::handshake::MemoryControllerOp":$mcOp,
                    "ValueRange":$inputs, "ArrayRef<unsigned>":$groupSizes,
-                   "unsigned":$numLoads, "unsigned":$numStores,
+                   "unsigned":$numCircuitLoads, "unsigned":$numMCLoads,
+                   "unsigned":$numMCStores,
                    "::dynamatic::handshake::MemOrderingKind":$orderingKind)>,
   ];
   let hasVerifier = 1;

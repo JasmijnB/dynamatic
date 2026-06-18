@@ -17,6 +17,8 @@ with open(directory / "dependency-config.json") as f:
 pq = QueueConfig(raw["PQConfig"])
 sq = QueueConfig(raw["SQConfig"])
 config = DependencyCheckerConfig.from_parts(raw, pq, sq)
+config.pq_bb = 0
+config.sq_bb = 0
 
 verilog_em = VerilogEmitter()
 vhdl_em = VHDLEmitter()

@@ -149,15 +149,17 @@ LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
         loc, memref, memStart, inputs.mcInputs, ctrlEnd, inputs.mcBlocks,
         mcNumLoads + nLoads);
 
-    // Add the MC's load data results to the OU's inputs and create the OU,
-    // passing nLoads and nStores so it generates the necessary interface
-    // outputs
+    // Add the MC's load data results to the OU's inputs and create the OU. The
+    // OU produces one load-data result per circuit load port (lsqNumLoads), but
+    // its MC-facing interface only has nLoads load channels and nStores store
+    // channels (one each for an LSQ, one per port for an ordering network).
     ValueRange mcOutputs = mcOp.getOutputs();
     for (unsigned i = 0; i < nLoads; ++i)
       inputs.lsqInputs.push_back(mcOutputs[mcNumLoads + i]);
     lsqOp = builder.create<handshake::MemOrderingUnitOp>(
-        loc, mcOp, inputs.lsqInputs, inputs.lsqGroupSizes, lsqNumLoads, nStores,
-        orderingKind);
+        loc, mcOp, inputs.lsqInputs, inputs.lsqGroupSizes,
+        /*numCircuitLoads=*/lsqNumLoads, /*numMCLoads=*/nLoads,
+        /*numMCStores=*/nStores, orderingKind);
 
     // Resolve the backedges to fully connect the MC and OU
     ValueRange lsqMemResults =

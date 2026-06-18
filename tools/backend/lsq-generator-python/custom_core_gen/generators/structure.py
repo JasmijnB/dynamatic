@@ -10,6 +10,7 @@ from custom_core_gen.generators.generator import Generator
 import enum
 from copy import copy
 from collections import defaultdict
+from functools import reduce
 
 DC_TO_PQ_MAP = {
     "pq_addr_i": "q_addr_o",
@@ -25,6 +26,9 @@ DC_TO_SQ_MAP = {
     "sq_access_en_i": "access_en_o",
     "allow_sq_access_o": "allow_access_i",
 }
+
+# DC ports that are handled by structure.py's BB routing rather than the queue maps.
+CROSS_BB_DC_PORTS = {"pq_bb_valid_i", "pq_bb_ready_o", "sq_bb_valid_i", "sq_bb_ready_o"}
 
 
 def get_global_queue_ports(queue_def):
@@ -185,9 +189,8 @@ class Structure(Generator):
         assert (
             sq_vals <= sq_ports
         ), f"DC_TO_SQ_MAP values not in succ ports:  {sq_vals - sq_ports}"
-        assert (
-            pq_keys | sq_keys
-        ) == dc_ports, f"DC ports not fully mapped: {dc_ports - (pq_keys | sq_keys)}"
+        assert dc_ports <= (pq_keys | sq_keys | CROSS_BB_DC_PORTS), \
+            f"DC ports not fully mapped: {dc_ports - (pq_keys | sq_keys | CROSS_BB_DC_PORTS)}"
 
         # Count ports per queue config
         group_sizes = defaultdict(int)
@@ -255,6 +258,8 @@ class Structure(Generator):
             dp_checker.init_port_vars(em)
             dp_checkers.append(dp_checker)
 
+        self._route_bb_ports(em, dp_checkers)
+
         defaults = {}
         defaults["allow_alloc_i"] = Logic(em, "allow_alloc_default", "w")
         defaults["allow_access_i"] = Logic(em, "allow_access_default", "w")
@@ -267,3 +272,44 @@ class Structure(Generator):
             dp_checker.instantate(em)
 
         self._write_to_file(em, out_path, out_file)
+
+    def _route_bb_ports(self, em: Emitter, dp_checkers: list) -> None:
+        """Create structure-level BB handshake ports and wire them to cross-BB DCs.
+
+        For each distinct BB ID that appears in a cross-BB DC, one bb_valid_{x}
+        input and bb_ready_{x} output are added to the structure module.
+        The valid forwarded to each DC is gated by all *other* DCs' ready signals
+        for the same BB so that all DCs record the execution atomically.
+        """
+        bb_to_dc_ports = defaultdict(list)  # bb_id -> [(dp_checker, prefix)]
+        for dp_checker in dp_checkers:
+            dc_config = dp_checker.dp_def.configs
+            if dc_config.pq_bb != dc_config.sq_bb:
+                bb_to_dc_ports[dc_config.pq_bb].append((dp_checker, "pq"))
+                bb_to_dc_ports[dc_config.sq_bb].append((dp_checker, "sq"))
+
+        dc_ready_wires = {}  # (id(dp_checker), prefix) -> Logic "w" wire
+        for bb_id, pairs in sorted(bb_to_dc_ports.items()):
+            for dp_checker, prefix in pairs:
+                wire = Logic(em, f"dc_{dp_checker.pred.num}_{dp_checker.succ.num}_{prefix}_bb_ready", "w")
+                dc_ready_wires[(id(dp_checker), prefix)] = wire
+                dp_checker.port_vars[f"{prefix}_bb_ready_o"] = wire
+
+        for bb_id, pairs in sorted(bb_to_dc_ports.items()):
+            bb_valid = Logic(em, f"bb_valid_{bb_id}", "i")
+            bb_ready = Logic(em, f"bb_ready_{bb_id}", "o")
+            all_readies = [dc_ready_wires[(id(dp), pfx)] for dp, pfx in pairs]
+
+            em.add_assignment(bb_ready, reduce(lambda x, y: x & y, all_readies))
+
+            for i, (dp_checker, prefix) in enumerate(pairs):
+                others = [all_readies[j] for j in range(len(pairs)) if j != i]
+                if others:
+                    masked = Logic(em, f"bb_{bb_id}_{prefix}_{dp_checker.pred.num}_{dp_checker.succ.num}_valid", "w")
+                    factor = bb_valid
+                    for w in others:
+                        factor = factor & w
+                    em.add_assignment(masked, factor)
+                    dp_checker.port_vars[f"{prefix}_bb_valid_i"] = masked
+                else:
+                    dp_checker.port_vars[f"{prefix}_bb_valid_i"] = bb_valid
