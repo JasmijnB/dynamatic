@@ -91,12 +91,18 @@ class DependencyChecker(Generator):
             ad_decr = LogicVec(em, "ad_decr", "w", ad_width, is_signed=True)
             ad_incr = LogicVec(em, "ad_incr", "w", ad_width, is_signed=True)
 
-            pq_array_at_head, sq_array_at_head, new_ad_bits, pq_dep_addr_width = \
-                self.generate_dep_arrays(em, pq_done_en_i, sq_access_en_i, ad_incr)
+            pq_array_at_head, sq_array_at_head, new_ad_bits, pq_dep_addr_width, undo_inc = \
+                self.generate_dep_arrays(em, pq_done_en_i, sq_access_en_i, ad_incr, access_disparity_base)
 
             em.add_assignment(dec_ad, Val(1).when(pq_done_en_i & (pq_array_at_head | (access_disparity_base > Val(0, size=ad_width)))).else_(Val(0)))
-            
-            em.add_assignment(ad_decr, access_disparity_base - dec_ad)
+
+            # `dec_ad` decrements eagerly on a predecessor done, reading the head's
+            # boundary bit. When the head is the latest P that bit is only a
+            # placeholder, so the decrement is speculative; `undo_val` adds the 1
+            # back if a later predecessor proves that P was not its group's last.
+            undo_val = LogicVec(em, "ad_undo_val", "w", ad_width, is_signed=True)
+            em.add_assignment(undo_val, Val(1).when(undo_inc).else_(Val(0)))
+            em.add_assignment(ad_decr, (access_disparity_base - dec_ad) + undo_val)
             
             em.add_assignment(ad_incr, ad_decr + Val(1))
             
@@ -273,7 +279,7 @@ class DependencyChecker(Generator):
 
         return array, head, tail, tail_en, full, array_at_head
 
-    def generate_dep_arrays(self, em: Emitter, pq_done_en, sq_access_en, access_disparity):
+    def generate_dep_arrays(self, em: Emitter, pq_done_en, sq_access_en, access_disparity, access_disparity_base):
         n_pq_entries = self.configs.pq.num_entries * self.configs.dep_entry_ratio
         n_sq_entries = self.configs.sq.num_entries * self.configs.dep_entry_ratio
 
@@ -352,5 +358,58 @@ class DependencyChecker(Generator):
         self.dep_full = Logic(em, "dep_full", "w")
         em.add_assignment(self.dep_full, pq_dep_full | sq_dep_full)
 
-        return pq_array_at_head, sq_array_at_head, new_ad, pq_dep_addr_width
+        # --- speculative-decrement undo ---------------------------------------
+        # The eager decrement (in `generate`) reads pq_array_at_head. When the head
+        # is the most-recent P that bit is still a placeholder '1', so the
+        # decrement is a guess that this P is the last of its group. We only learn
+        # the truth once the next item executes:
+        #   * a successor (S) executes  -> the P really was last, keep it.
+        #   * another predecessor (P) executes first -> it was not last, undo.
+        # The decrement must stay eager (not deferred): a predecessor done has to
+        # cancel the successor's disparity increment in the same window, otherwise
+        # the succ-can-execute-once loop deadlocks.
+        ad_width = self.configs.access_disparity_width
+        ptr_width = pq_dep_addr_width + 1
+
+        # head is the most-recent P iff advancing it by one reaches the tail
+        # (exactly one entry occupied); only then is pq_array_at_head a placeholder.
+        pq_dep_head_plus1 = LogicVec(em, "pq_dep_head_plus1", "w", ptr_width)
+        WrapAddConst(em, pq_dep_head_plus1, pq_dep_head, 1, n_pq_entries)
+        pq_head_is_latest = Logic(em, "pq_head_is_latest", "w")
+        em.add_assignment(
+            pq_head_is_latest,
+            Val(pq_dep_head_plus1.getNameRead()) == Val(pq_dep_tail.getNameRead()),
+        )
+
+        # In the positive-lead regime every done legitimately decrements, so those
+        # are never speculative.
+        ad_base_positive = Logic(em, "ad_base_positive", "w")
+        em.add_assignment(
+            ad_base_positive, access_disparity_base > Val(0, size=ad_width)
+        )
+
+        # A done on the placeholder (latest P, no S since it) is speculative.
+        spec_dec_set = Logic(em, "spec_dec_set", "w")
+        em.add_assignment(
+            spec_dec_set,
+            pq_done_en & pq_head_is_latest & ~sq_executed_last & ~ad_base_positive,
+        )
+        # At most one speculative decrement is outstanding: the moment another item
+        # executes it is resolved. Held until then.
+        spec_dec_pending = Logic(em, "spec_dec_pending", "r")
+        em.add_assignment(
+            spec_dec_pending,
+            ~(pq_bb_executed | sq_bb_executed) & (spec_dec_pending | spec_dec_set),
+        )
+        spec_dec_pending.regInit(init=0)
+
+        # Undo when the next executed item is a predecessor (no S in between): the
+        # speculative P was not the last of its group.
+        undo_inc = Logic(em, "ad_undo_inc", "w")
+        em.add_assignment(
+            undo_inc,
+            (spec_dec_pending | spec_dec_set) & pq_bb_executed & ~sq_bb_executed,
+        )
+
+        return pq_array_at_head, sq_array_at_head, new_ad, pq_dep_addr_width, undo_inc
 
