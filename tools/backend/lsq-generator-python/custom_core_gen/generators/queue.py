@@ -89,18 +89,25 @@ class Queue(Generator):
 
         em.add_assignment(empty_o, q_empty)
 
-        # bypass_addr_valid: queue is empty with no pending issues and a valid address.
-        # Deliberately excludes allow_access_i to break the combinatorial loop that
-        # would form through queue_head_o → dep-checker → allow_access_i → bypass_active.
-        bypass_addr_valid = Logic(em, "bypass_addr_valid", "w")
-        em.add_assignment(
-            bypass_addr_valid,
-            q_empty & (q_issue == q_head) & circ_addr_valid_i,
-        )
+        # Bypass is an optional fast path that lets an incoming address skip the
+        # queue when it is empty. When disabled the queue always routes through
+        # its buffer.
+        if self.configs.bypass:
+            # bypass_addr_valid: queue is empty with no pending issues and a valid address.
+            # Deliberately excludes allow_access_i to break the combinatorial loop that
+            # would form through queue_head_o → dep-checker → allow_access_i → bypass_active.
+            bypass_addr_valid = Logic(em, "bypass_addr_valid", "w")
+            em.add_assignment(
+                bypass_addr_valid,
+                q_empty & (q_issue == q_head) & circ_addr_valid_i,
+            )
 
-        # bypass_active additionally requires allow_access_i; used for all control paths.
-        bypass_active = Logic(em, "bypass_active", "w")
-        em.add_assignment(bypass_active, bypass_addr_valid & allow_access_i)
+            # bypass_active additionally requires allow_access_i; used for all control paths.
+            bypass_active = Logic(em, "bypass_active", "w")
+            em.add_assignment(bypass_active, bypass_addr_valid & allow_access_i)
+        else:
+            bypass_addr_valid = None
+            bypass_active = None
 
         # Allocation
         can_alloc = Logic(em, "can_alloc", "w")
@@ -109,9 +116,10 @@ class Queue(Generator):
         em.add_assignment(alloc_en, circ_addr_valid_i & can_alloc)
 
         # Retirement: also fires when bypass completes (memory accepts)
-        em.add_assignment(
-            head_en, (~q_empty & allow_access_i) | (bypass_active & mem_addr_ready_i)
-        )
+        head_retire = ~q_empty & allow_access_i
+        if self.configs.bypass:
+            head_retire = head_retire | (bypass_active & mem_addr_ready_i)
+        em.add_assignment(head_en, head_retire)
 
         # Issue
         can_issue = Logic(em, "can_issue", "w")
@@ -120,18 +128,22 @@ class Queue(Generator):
             can_issue,
             ((q_issue == q_head) & head_en) | (q_issue != q_head) | q_full_w_issue,
         )
-        em.add_assignment(issue_en, (can_issue | bypass_active) & mem_addr_ready_i)
+        issue_req = can_issue | bypass_active if self.configs.bypass else can_issue
+        em.add_assignment(issue_en, issue_req & mem_addr_ready_i)
 
-        em.add_assignment(mem_addr_valid_o, can_issue | bypass_active)
+        em.add_assignment(mem_addr_valid_o, issue_req)
 
         # In bypass mode route circ_addr_i directly; otherwise use the queue buffer
         mem_addr_from_queue = LogicVec(
             em, "mem_addr_from_queue", "w", self.configs.addr_width
         )
         MuxLookUp(em, mem_addr_from_queue, q_addr, q_issue_sel)
-        em.add_assignment(
-            mem_addr_o, circ_addr_i.when(bypass_active).else_(mem_addr_from_queue)
-        )
+        if self.configs.bypass:
+            em.add_assignment(
+                mem_addr_o, circ_addr_i.when(bypass_active).else_(mem_addr_from_queue)
+            )
+        else:
+            em.add_assignment(mem_addr_o, mem_addr_from_queue)
 
         if is_store:
             em.add_assignment(mem_data_o, circ_data_i)

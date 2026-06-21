@@ -11,6 +11,7 @@ class QueueConfig:
     id_val: int = 0
     q_addr_width: int = 2
     st_resp: bool = False
+    bypass: bool = False
     is_succ = False
     is_pred = False
 
@@ -23,6 +24,7 @@ class QueueConfig:
         self.id_val = config["IDVal"]
         self.ldp_addr_width = config["LDPAddrWidth"]
         self.st_resp = config["StResp"]
+        self.bypass = config.get("Bypass", False)
         self.q_addr_width = math.ceil(math.log2(self.num_entries))
         self.is_succ = False
         self.is_pred = False
