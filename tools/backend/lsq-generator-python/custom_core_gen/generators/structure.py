@@ -161,16 +161,31 @@ class Structure(Generator):
             q_def.generate(em.new(), path_rtl=out_path, out_file=out_file)
             queue_defs[port_idx] = q_def
 
-        # One DependencyChecker def per unique (src_queue_idx, dst_queue_idx) pair
+        # One DependencyChecker def per unique module shape. The queue pair alone
+        # is not enough: cross-BB vs same-BB edges produce different ports and
+        # logic (see DependencyChecker.generate's crosses_bb branch), and
+        # succ_can_execute_once / access_disparity_width change the body too. Edges
+        # that differ in any of these must get distinct defs, otherwise a shared
+        # def's port list won't match what _route_bb_ports wires per instance
+        # (e.g. a same-BB instance reusing a cross-BB def has no bb_valid mapping).
         dc_def_map = {}
+        edge_to_dc_key = {}
         for edge_idx, (src_port, dst_port) in enumerate(
             zip(config.edge_src, config.edge_dst)
         ):
             src_queue_idx = config.ports_to_queue[src_port]
             dst_queue_idx = config.ports_to_queue[dst_port]
-            key = (src_queue_idx, dst_queue_idx)
+            dc_config = config.dependency_checkers[edge_idx]
+            crosses_bb = config.port_bb_ids[src_port] != config.port_bb_ids[dst_port]
+            key = (
+                src_queue_idx,
+                dst_queue_idx,
+                crosses_bb,
+                dc_config.succ_can_execute_once,
+                dc_config.access_disparity_width,
+            )
+            edge_to_dc_key[edge_idx] = key
             if key not in dc_def_map:
-                dc_config = config.dependency_checkers[edge_idx]
                 dc_config.pq = config.queues[src_queue_idx]
                 dc_config.sq = config.queues[dst_queue_idx]
                 dc_config.pq_bb = config.port_bb_ids[src_port]
@@ -265,11 +280,8 @@ class Structure(Generator):
         for edge_idx, (src_port, dst_port) in enumerate(
             zip(config.edge_src, config.edge_dst)
         ):
-            src_queue_idx = config.ports_to_queue[src_port]
-            dst_queue_idx = config.ports_to_queue[dst_port]
-            key = (src_queue_idx, dst_queue_idx)
             dp_checker = DependencyCheckerInstance(
-                dc_def_map[key],
+                dc_def_map[edge_to_dc_key[edge_idx]],
                 queue_instances[src_port],
                 queue_instances[dst_port],
                 config.port_bb_ids[src_port],
