@@ -91,7 +91,7 @@ class DependencyChecker(Generator):
             ad_decr = LogicVec(em, "ad_decr", "w", ad_width, is_signed=True)
             ad_incr = LogicVec(em, "ad_incr", "w", ad_width, is_signed=True)
 
-            pq_array_at_head, sq_array_at_head, new_ad_bits, pq_dep_addr_width, undo_inc = \
+            pq_array_at_head, sq_array_at_head, new_ad_bits, pq_dep_addr_width, undo_inc, new_ad_behind = \
                 self.generate_dep_arrays(em, pq_done_en_i, sq_access_en_i, ad_incr, access_disparity_base)
 
             em.add_assignment(dec_ad, Val(1).when(pq_done_en_i & (pq_array_at_head | (access_disparity_base > Val(0, size=ad_width)))).else_(Val(0)))
@@ -111,22 +111,27 @@ class DependencyChecker(Generator):
             ad_final = LogicVec(em, "ad_final_val", "w", ad_width, is_signed=True)
             em.add_assignment(ad_final, ad_incr.when(sq_array_at_head).else_(ad_decr))
 
+            # ad_jumped is the boundary-recompute disparity, widened from the cyclic
+            # forward distance new_ad (see new_ad_behind). When the dep array holds a
+            # real boundary it is a genuine pending predecessor ahead of the head, so
+            # the distance is a non-negative count (zero-extend, ad_pos). When the dep
+            # array is empty the search result is spurious and must instead be read as
+            # a *negative* disparity ("predecessor already retired"), i.e.
+            # new_ad - n_pq_entries (ad_neg). Picking the wrong sign here is exactly
+            # the zero-extension deadlock (empty read as a large positive -> successor
+            # waits forever) versus the sign-extension early-release (a valid far-ahead
+            # boundary read as negative -> successor overtakes pending predecessors).
+            n_pq_entries = self.configs.pq.num_entries * self.configs.dep_entry_ratio
+            ad_pos = LogicVec(em, "pq_new_ad_pos", "w", ad_width, is_signed=True)
             pad = ad_width - pq_dep_addr_width
             if pad > 0:
-                ad_jumped = LogicVec(em, "pq_new_ad_widened", "w", ad_width, is_signed=True)
-                # new_ad is a head-relative cyclic distance in a dep array sized
-                # dep_entry_ratio (2x) larger than the queue, so a boundary that lies
-                # behind the head reads as a two's-complement negative value
-                # (e.g. -1 == all-ones). It must be sign-extended into the wider
-                # signed access_disparity: zero-extension would turn -1 into +31,
-                # so corresponding_entry_sent (access_disparity < 0) never fires and
-                # the successor deadlocks waiting for a predecessor that already retired.
-                em.add_custom_statement(CustomStatement(
-                    f"{ad_jumped.getNameWrite()} <= resize(signed({new_ad_bits.getNameRead()}), {ad_width});",
-                    f"assign {ad_jumped.getNameWrite()} = $signed({new_ad_bits.getNameRead()});",
-                ))
+                em.add_assignment(ad_pos, Val(0, pad).concat(new_ad_bits))
             else:
-                ad_jumped = new_ad_bits
+                em.add_assignment(ad_pos, new_ad_bits)
+            ad_neg = LogicVec(em, "pq_new_ad_neg", "w", ad_width, is_signed=True)
+            em.add_assignment(ad_neg, ad_pos - Val(n_pq_entries, size=ad_width))
+            ad_jumped = LogicVec(em, "pq_new_ad_widened", "w", ad_width, is_signed=True)
+            em.add_assignment(ad_jumped, ad_neg.when(new_ad_behind).else_(ad_pos))
 
             ad_next = LogicVec(em, "ad_next", "w", ad_width, is_signed=True)
             em.add_assignment(ad_next, ad_final.when(ad_final < Val(0, size=ad_width)).else_(ad_jumped))
@@ -365,6 +370,20 @@ class DependencyChecker(Generator):
         new_ad = LogicVec(em, "new_ad", "w", pq_dep_addr_width)
         WrapSub(em, new_ad, new_ad_abs, pq_dep_head_idx, n_pq_entries)
 
+        # new_ad is a cyclic forward distance from the dep-array head to the located
+        # boundary. When the dep array is empty there is no real pending-predecessor
+        # boundary: the priority search returns a stale/spurious index whose wrapped
+        # distance must NOT be read as a positive disparity (that is the
+        # zero-extension deadlock - the successor waits forever on a predecessor that
+        # already retired). In that case the disparity is negative ("already sent").
+        # When non-empty the located boundary is a genuine pending predecessor ahead
+        # of the head, so the distance is a non-negative count.
+        new_ad_behind = Logic(em, "new_ad_behind", "w")
+        em.add_assignment(
+            new_ad_behind,
+            Val(pq_dep_head.getNameRead()) == Val(pq_dep_tail.getNameRead()),
+        )
+
         self.dep_full = Logic(em, "dep_full", "w")
         em.add_assignment(self.dep_full, pq_dep_full | sq_dep_full)
 
@@ -421,5 +440,5 @@ class DependencyChecker(Generator):
             (spec_dec_pending | spec_dec_set) & pq_bb_executed & ~sq_bb_executed,
         )
 
-        return pq_array_at_head, sq_array_at_head, new_ad, pq_dep_addr_width, undo_inc
+        return pq_array_at_head, sq_array_at_head, new_ad, pq_dep_addr_width, undo_inc, new_ad_behind
 
