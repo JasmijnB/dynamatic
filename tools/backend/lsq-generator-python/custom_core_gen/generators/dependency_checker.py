@@ -114,7 +114,17 @@ class DependencyChecker(Generator):
             pad = ad_width - pq_dep_addr_width
             if pad > 0:
                 ad_jumped = LogicVec(em, "pq_new_ad_widened", "w", ad_width, is_signed=True)
-                em.add_assignment(ad_jumped, Val(0, pad).concat(new_ad_bits))
+                # new_ad is a head-relative cyclic distance in a dep array sized
+                # dep_entry_ratio (2x) larger than the queue, so a boundary that lies
+                # behind the head reads as a two's-complement negative value
+                # (e.g. -1 == all-ones). It must be sign-extended into the wider
+                # signed access_disparity: zero-extension would turn -1 into +31,
+                # so corresponding_entry_sent (access_disparity < 0) never fires and
+                # the successor deadlocks waiting for a predecessor that already retired.
+                em.add_custom_statement(CustomStatement(
+                    f"{ad_jumped.getNameWrite()} <= resize(signed({new_ad_bits.getNameRead()}), {ad_width});",
+                    f"assign {ad_jumped.getNameWrite()} = $signed({new_ad_bits.getNameRead()});",
+                ))
             else:
                 ad_jumped = new_ad_bits
 
