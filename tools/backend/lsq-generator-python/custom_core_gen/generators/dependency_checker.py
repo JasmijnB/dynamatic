@@ -56,8 +56,9 @@ class DependencyChecker(Generator):
                 em, "access_disparity", "r", ad_width, is_signed=True
             )
             # if the successor port executes sequentially before the predcessor port,
-            # initialise the access disparity to -1 (implying the pred already executed once)
-            ad_initial_value = 0 if not (self.configs.succ_can_execute_once) else -1
+            # initialise the access disparity to 0 (implying the pred already executed once,
+            # so there is nothing to check); otherwise 1 (one P access still to check)
+            ad_initial_value = 1 if not (self.configs.succ_can_execute_once) else 0
             access_disparity.regInit(init=ad_initial_value)
             inc_ad = LogicVec(
                 em,
@@ -83,7 +84,7 @@ class DependencyChecker(Generator):
             access_disparity_base = LogicVec(
                 em, "access_disparity_base", "r", ad_width, is_signed=True
             )
-            access_disparity_base.regInit(init=-1)
+            access_disparity_base.regInit(init=0)
 
 
             inc_ad = LogicVec( em, "inc_access_disparity", "w", self.configs.access_disparity_width, is_signed=True)
@@ -94,7 +95,7 @@ class DependencyChecker(Generator):
             pq_array_at_head, sq_array_at_head, new_ad_bits, pq_dep_addr_width, undo_inc, new_ad_behind = \
                 self.generate_dep_arrays(em, pq_done_en_i, sq_access_en_i, ad_incr, access_disparity_base)
 
-            em.add_assignment(dec_ad, Val(1).when(pq_done_en_i & (pq_array_at_head | (access_disparity_base > Val(0, size=ad_width)))).else_(Val(0)))
+            em.add_assignment(dec_ad, Val(1).when(pq_done_en_i & (pq_array_at_head | (access_disparity_base > Val(1, size=ad_width)))).else_(Val(0)))
 
             # `dec_ad` decrements eagerly on a predecessor done, reading the head's
             # boundary bit. When the head is the latest P that bit is only a
@@ -121,20 +122,24 @@ class DependencyChecker(Generator):
             # the zero-extension deadlock (empty read as a large positive -> successor
             # waits forever) versus the sign-extension early-release (a valid far-ahead
             # boundary read as negative -> successor overtakes pending predecessors).
+            # new_ad is the head-relative distance to the boundary; AD now counts how
+            # many P accesses to check (entries 0..distance), which is one more than the
+            # distance, so widen and add 1. ad_neg, derived from ad_pos, inherits the
+            # same +1 shift.
             n_pq_entries = self.configs.pq.num_entries * self.configs.dep_entry_ratio
             ad_pos = LogicVec(em, "pq_new_ad_pos", "w", ad_width, is_signed=True)
             pad = ad_width - pq_dep_addr_width
             if pad > 0:
-                em.add_assignment(ad_pos, Val(0, pad).concat(new_ad_bits))
+                em.add_assignment(ad_pos, Val(0, pad).concat(new_ad_bits) + Val(1))
             else:
-                em.add_assignment(ad_pos, new_ad_bits)
+                em.add_assignment(ad_pos, new_ad_bits + Val(1))
             ad_neg = LogicVec(em, "pq_new_ad_neg", "w", ad_width, is_signed=True)
             em.add_assignment(ad_neg, ad_pos - Val(n_pq_entries, size=ad_width))
             ad_jumped = LogicVec(em, "pq_new_ad_widened", "w", ad_width, is_signed=True)
             em.add_assignment(ad_jumped, ad_neg.when(new_ad_behind).else_(ad_pos))
 
             ad_next = LogicVec(em, "ad_next", "w", ad_width, is_signed=True)
-            em.add_assignment(ad_next, ad_final.when(ad_final < Val(0, size=ad_width)).else_(ad_jumped))
+            em.add_assignment(ad_next, ad_final.when(ad_final <= Val(0, size=ad_width)).else_(ad_jumped))
             em.add_assignment(access_disparity, ad_next)
 
             em.add_assignment(access_disparity_base, access_disparity.when(sq_access_en_i).else_(ad_decr))
@@ -143,10 +148,12 @@ class DependencyChecker(Generator):
         check_mask = LogicVec(em, "check_mask", "w", self.configs.pq.num_entries)
         ones = LogicVec(em, "ones", "w", self.configs.pq.num_entries)
         # generate access_disparity 1's for the check mask
+        # AD counts how many P accesses to check, so bit i is set iff i < AD
+        # (AD = 0 checks no entries, AD = n checks entries 0..n-1).
         for i in range(self.configs.pq.num_entries):
             em.add_assignment(
                 (ones, i),
-                Bit(1).when(Val(i, size=ad_width) <= access_disparity).else_(Bit(0)),
+                Bit(1).when(Val(i, size=ad_width) < access_disparity).else_(Bit(0)),
             )
         CyclicRightShift(em, check_mask, ones, pq_done_i)
 
@@ -188,10 +195,10 @@ class DependencyChecker(Generator):
         corresponding_entry_sent = Logic(em, "corresponding_entry_sent", "w")
         corresponding_entry_allocated = Logic(em, "corresponding_entry_allocated", "w")
         em.add_assignment(
-            corresponding_entry_allocated, (pq_length_as_cmp > ad_as_cmp)
+            corresponding_entry_allocated, (pq_length_as_cmp >= ad_as_cmp)
         )
         em.add_assignment(
-            corresponding_entry_sent, access_disparity < Val(0, size=ad_width)
+            corresponding_entry_sent, access_disparity <= Val(0, size=ad_width)
         )
 
         em.add_comment(
@@ -200,7 +207,7 @@ class DependencyChecker(Generator):
             "(i.e. the predecessor has allocated the corresponding entry for this access)\n"
             "\t- AND, there is either: \n"
             "       - no conflict  \n"
-            "       - if the access disparity is negative (i.e. the corresponding entry has been complete)\n"
+            "       - if the access disparity is zero or negative (i.e. the corresponding entry has been complete)\n"
             "\t- AND, the access disparity is not maxed out\n"
         )
         # ad is a signed number, so the max value it can take is 2^(n-1) - 1
@@ -211,11 +218,13 @@ class DependencyChecker(Generator):
             ~conflict | corresponding_entry_sent,
         ]
         
-        # if the max access disparity is larger or equal to to the queue size, 
-        # we don't need to check for overflows as the first condition already guarantees 
-        # that the access disparity cannot exceed the max
-        # because access_disparity <= pq_length_i and pq_length_i <= num_entries, so access_disparity <= num_entries
-        if max_ad_val < self.configs.pq.num_entries:
+        # corresponding_entry_allocated requires pq_length_i >= access_disparity, and a
+        # successor access bumps the disparity once more, so the largest value the
+        # register can reach is num_entries + 1 (access_disparity <= pq_length_i and
+        # pq_length_i <= num_entries, plus one final increment). If max_ad_val can hold
+        # that, the allocation condition alone prevents overflow and no explicit cap is
+        # needed; otherwise add the cap.
+        if max_ad_val <= self.configs.pq.num_entries:
             conditions.append(access_disparity <= Val(max_ad_val, size=ad_width))
 
         em.add_assignment(
@@ -342,12 +351,19 @@ class DependencyChecker(Generator):
             Val(sq_dep_head.getNameRead()) != Val(sq_dep_tail.getNameRead()),
         )
 
+        # AD now counts how many P accesses to check (one more than the head-relative
+        # distance to the boundary), so the search must start at AD - 1 to land on the
+        # same absolute boundary as before.
+        ad_search_basis = LogicVec(
+            em, "ad_search_basis", "w", self.configs.access_disparity_width, is_signed=True
+        )
+        em.add_assignment(ad_search_basis, access_disparity - Val(1))
         ad_idx = LogicVec(em, "ad_idx", "w", pq_dep_addr_width)
-        # access_disparity is `signed` in VHDL; slicing it yields `signed`, not
+        # ad_search_basis is `signed` in VHDL; slicing it yields `signed`, not
         # `std_logic_vector`, so an explicit cast is required on the VHDL side.
         em.add_custom_statement(CustomStatement(
-            f"{ad_idx.getNameWrite()} <= std_logic_vector({access_disparity.getNameRead()}({pq_dep_addr_width - 1} downto 0));",
-            f"assign {ad_idx.getNameWrite()} = {access_disparity.getNameRead()}[{pq_dep_addr_width - 1}:0];",
+            f"{ad_idx.getNameWrite()} <= std_logic_vector({ad_search_basis.getNameRead()}({pq_dep_addr_width - 1} downto 0));",
+            f"assign {ad_idx.getNameWrite()} = {ad_search_basis.getNameRead()}[{pq_dep_addr_width - 1}:0];",
         ))
         ad_oh = LogicVec(em, "ad_oh", "w", n_pq_entries)
         BitsToOH(em, ad_oh, ad_idx)
@@ -414,7 +430,7 @@ class DependencyChecker(Generator):
         # are never speculative.
         ad_base_positive = Logic(em, "ad_base_positive", "w")
         em.add_assignment(
-            ad_base_positive, access_disparity_base > Val(0, size=ad_width)
+            ad_base_positive, access_disparity_base > Val(1, size=ad_width)
         )
 
         # A done on the placeholder (latest P, no S since it) is speculative.
