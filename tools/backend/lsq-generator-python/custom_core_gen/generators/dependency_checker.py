@@ -86,13 +86,12 @@ class DependencyChecker(Generator):
             )
             access_disparity_base.regInit(init=0)
 
-
             inc_ad = LogicVec( em, "inc_access_disparity", "w", self.configs.access_disparity_width, is_signed=True)
             dec_ad = LogicVec(em, "dec_access_disparity", "w", self.configs.access_disparity_width, is_signed=True)
             ad_decr = LogicVec(em, "ad_decr", "w", ad_width, is_signed=True)
             ad_incr = LogicVec(em, "ad_incr", "w", ad_width, is_signed=True)
 
-            pq_array_at_head, sq_array_at_head, new_ad_bits, pq_dep_addr_width, undo_inc, new_ad_behind = \
+            pq_array_at_head, sq_array_at_head, new_ad_bits, pq_dep_addr_width, undo_inc, new_ad_behind, s_next_head = \
                 self.generate_dep_arrays(em, pq_done_en_i, sq_access_en_i, ad_incr, access_disparity_base)
 
             em.add_assignment(dec_ad, Val(1).when(pq_done_en_i & (pq_array_at_head | (access_disparity_base > Val(1, size=ad_width)))).else_(Val(0)))
@@ -104,28 +103,12 @@ class DependencyChecker(Generator):
             undo_val = LogicVec(em, "ad_undo_val", "w", ad_width, is_signed=True)
             em.add_assignment(undo_val, Val(1).when(undo_inc).else_(Val(0)))
             em.add_assignment(ad_decr, (access_disparity_base - dec_ad) + undo_val)
-            
-            em.add_assignment(ad_incr, ad_decr + Val(1))
-            
 
+            em.add_assignment(ad_incr, ad_decr + Val(1))
 
             ad_final = LogicVec(em, "ad_final_val", "w", ad_width, is_signed=True)
             em.add_assignment(ad_final, ad_incr.when(sq_array_at_head).else_(ad_decr))
 
-            # ad_jumped is the boundary-recompute disparity, widened from the cyclic
-            # forward distance new_ad (see new_ad_behind). When the dep array holds a
-            # real boundary it is a genuine pending predecessor ahead of the head, so
-            # the distance is a non-negative count (zero-extend, ad_pos). When the dep
-            # array is empty the search result is spurious and must instead be read as
-            # a *negative* disparity ("predecessor already retired"), i.e.
-            # new_ad - n_pq_entries (ad_neg). Picking the wrong sign here is exactly
-            # the zero-extension deadlock (empty read as a large positive -> successor
-            # waits forever) versus the sign-extension early-release (a valid far-ahead
-            # boundary read as negative -> successor overtakes pending predecessors).
-            # new_ad is the head-relative distance to the boundary; AD now counts how
-            # many P accesses to check (entries 0..distance), which is one more than the
-            # distance, so widen and add 1. ad_neg, derived from ad_pos, inherits the
-            # same +1 shift.
             n_pq_entries = self.configs.pq.num_entries * self.configs.dep_entry_ratio
             ad_pos = LogicVec(em, "pq_new_ad_pos", "w", ad_width, is_signed=True)
             pad = ad_width - pq_dep_addr_width
@@ -142,7 +125,11 @@ class DependencyChecker(Generator):
             em.add_assignment(ad_next, ad_final.when(ad_final <= Val(0, size=ad_width)).else_(ad_jumped))
             em.add_assignment(access_disparity, ad_next)
 
-            em.add_assignment(access_disparity_base, access_disparity.when(sq_access_en_i).else_(ad_decr))
+            # The eager decrement (`ad_decr`) always applies. The +1 increment and
+            # the boundary jump it implies (`access_disparity`) only get latched on
+            # the cycle the successor's dep-array head actually advances; any other
+            # cycle just carries the decrement-only value forward.
+            em.add_assignment(access_disparity_base, access_disparity.when(s_next_head).else_(ad_decr))
 
 
         check_mask = LogicVec(em, "check_mask", "w", self.configs.pq.num_entries)
@@ -483,5 +470,5 @@ class DependencyChecker(Generator):
             (spec_dec_pending | spec_dec_set) & pq_bb_executed & ~sq_bb_executed,
         )
 
-        return pq_array_at_head, sq_array_at_head, new_ad, pq_dep_addr_width, undo_inc, new_ad_behind
+        return pq_array_at_head, sq_array_at_head, new_ad, pq_dep_addr_width, undo_inc, new_ad_behind, s_next_head
 
