@@ -303,6 +303,28 @@ class DependencyChecker(Generator):
 
         return array, head, tail, tail_en, full, array_at_head
 
+    def _make_s_next_head(self, em: Emitter, n_sq_entries, sq_dep_head, sq_dep_tail,
+                          sq_not_empty, sq_access_en, sq_bb_executed):
+        sq_dep_addr_width = math.ceil(math.log2(n_sq_entries))
+        sq_dep_head_after_pop = LogicVec(
+            em, "sq_dep_head_after_pop", "w", sq_dep_addr_width + 1
+        )
+        WrapAddConst(em, sq_dep_head_after_pop, sq_dep_head, 1, n_sq_entries)
+
+        sq_not_empty_after_pop = Logic(em, "sq_dep_not_empty_after_pop", "w")
+        em.add_assignment(
+            sq_not_empty_after_pop,
+            sq_not_empty
+            & (Val(sq_dep_head_after_pop.getNameRead()) != Val(sq_dep_tail.getNameRead())),
+        )
+
+        s_next_head = Logic(em, "s_next_head", "w")
+        em.add_assignment(
+            s_next_head,
+            (sq_access_en & sq_not_empty_after_pop) | (~sq_not_empty & sq_bb_executed),
+        )
+        return s_next_head
+
     def generate_dep_arrays(self, em: Emitter, pq_done_en, sq_access_en, access_disparity, access_disparity_base):
         n_pq_entries = self.configs.pq.num_entries * self.configs.dep_entry_ratio
         n_sq_entries = self.configs.sq.num_entries * self.configs.dep_entry_ratio
@@ -349,6 +371,11 @@ class DependencyChecker(Generator):
         em.add_assignment(
             sq_not_empty,
             Val(sq_dep_head.getNameRead()) != Val(sq_dep_tail.getNameRead()),
+        )
+
+        s_next_head = self._make_s_next_head(
+            em, n_sq_entries, sq_dep_head, sq_dep_tail, sq_not_empty,
+            sq_access_en, sq_bb_executed,
         )
 
         # AD now counts how many P accesses to check (one more than the head-relative
