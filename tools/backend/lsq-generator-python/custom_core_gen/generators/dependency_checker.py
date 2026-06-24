@@ -91,18 +91,22 @@ class DependencyChecker(Generator):
             ad_decr = LogicVec(em, "ad_decr", "w", ad_width, is_signed=True)
             ad_incr = LogicVec(em, "ad_incr", "w", ad_width, is_signed=True)
 
-            pq_array_at_head, sq_array_at_head, new_ad_bits, pq_dep_addr_width, undo_inc, new_ad_behind, s_next_head = \
+            pq_array_at_head, sq_array_at_head, new_ad_bits, pq_dep_addr_width, mark_extra_dec, new_ad_behind, s_next_head = \
                 self.generate_dep_arrays(em, pq_done_en_i, sq_access_en_i, ad_incr, access_disparity_base)
 
-            em.add_assignment(dec_ad, Val(1).when(pq_done_en_i & (pq_array_at_head | (access_disparity_base > Val(1, size=ad_width)))).else_(Val(0)))
-
-            # `dec_ad` decrements eagerly on a predecessor done, reading the head's
-            # boundary bit. When the head is the latest P that bit is only a
-            # placeholder, so the decrement is speculative; `undo_val` adds the 1
-            # back if a later predecessor proves that P was not its group's last.
-            undo_val = LogicVec(em, "ad_undo_val", "w", ad_width, is_signed=True)
-            em.add_assignment(undo_val, Val(1).when(undo_inc).else_(Val(0)))
-            em.add_assignment(ad_decr, (access_disparity_base - dec_ad) + undo_val)
+            # Decrement when a marked boundary predecessor at the head completes:
+            # the successor that marked it is now satisfied. A successor whose
+            # boundary predecessor had already retired (mark_extra_dec) takes its
+            # decrement immediately instead. Both can occur in the same cycle, so
+            # the disparity can drop by up to two. Boundaries are now definitive
+            # (set only by an actual successor), so no speculative undo is needed.
+            dec_boundary = LogicVec(em, "dec_boundary", "w", ad_width, is_signed=True)
+            em.add_assignment(dec_boundary, Val(1).when(pq_done_en_i & pq_array_at_head).else_(Val(0)))
+            dec_extra = LogicVec(em, "dec_extra", "w", ad_width, is_signed=True)
+            em.add_assignment(dec_extra, Val(1).when(mark_extra_dec).else_(Val(0)))
+#            em.add_assignment(dec_extra, Val(0))
+            em.add_assignment(dec_ad, dec_boundary + dec_extra)
+            em.add_assignment(ad_decr, access_disparity_base - dec_ad)
 
             em.add_assignment(ad_incr, ad_decr + Val(1))
 
@@ -229,7 +233,7 @@ class DependencyChecker(Generator):
         em.add_assignment(executed, valid_i & ready)
         return executed
 
-    def _make_dep_array(self, em: Emitter, prefix: str, n_entries: int, head_en, write_tuple: Logic):
+    def _make_dep_array(self, em: Emitter, prefix: str, n_entries: int, head_en, write_tuple: Logic, mark_en=None):
         addr_width = math.ceil(math.log2(n_entries))
         ptr_width = addr_width + 1
 
@@ -263,7 +267,25 @@ class DependencyChecker(Generator):
             Val(em.slice_var(tail.getNameRead(), ptr_width - 1, 0))
             == Val(em.slice_var(head.getNameRead(), ptr_width - 1, 0)))
 
-        if isinstance(write_tuple, tuple):
+        mark_already_consumed = None
+        if mark_en is not None:
+            # Predecessor marking scheme: a push (tail_en) writes 0 (this P is not
+            # yet depended on). A successor execution (mark_en) overwrites the
+            # most-recent entry, tail-1, with 1 - a definitive, per-successor
+            # dependency boundary - without advancing the tail. If the array is
+            # empty at the mark, tail-1 has already been popped (the predecessor
+            # finished before the successor): suppress the stray write (it would
+            # wrap behind the head) and signal an extra decrement instead.
+            mark_valid = Logic(em, f"{prefix}_mark_valid", "w")
+            em.add_assignment(mark_valid, mark_en & ~empty)
+            mark_already_consumed = Logic(em, f"{prefix}_mark_consumed", "w")
+            em.add_assignment(mark_already_consumed, mark_en & empty)
+            for i in range(n_entries):
+                em.add_assignment(array[i],
+                    Bit(0).when(Val(tail_oh, i) & tail_en)
+                    .else_(Bit(1).when(Val(tail_oh, (i + 1) % n_entries) & mark_valid)
+                    .else_(array[i])))
+        elif isinstance(write_tuple, tuple):
             prev_val, curr_val = write_tuple
             for i in range(n_entries):
                 em.add_assignment(array[i], curr_val.when(Val(tail_oh, i) & tail_en)
@@ -288,7 +310,7 @@ class DependencyChecker(Generator):
         array_at_head = Logic(em, f"{prefix}_array_at_head", "w")
         MuxLookUp(em, array_at_head, array, head_idx)
 
-        return array, head, tail, tail_en, full, array_at_head
+        return array, head, tail, tail_en, full, array_at_head, mark_already_consumed
 
     def _make_s_next_head(self, em: Emitter, n_sq_entries, sq_dep_head, sq_dep_tail,
                           sq_not_empty, sq_access_en, sq_bb_executed):
@@ -317,37 +339,44 @@ class DependencyChecker(Generator):
         n_sq_entries = self.configs.sq.num_entries * self.configs.dep_entry_ratio
 
         
-        pq_write_value = Logic(em, "pq_write_value", "w")
         sq_write_value = Logic(em, "sq_write_value", "w")
-        
-        pq_array, pq_dep_head, pq_dep_tail, pq_dep_tail_en, pq_dep_full, pq_array_at_head = \
-            self._make_dep_array(em, "pq", n_pq_entries, pq_done_en, (pq_write_value, Bit(1)))
-        sq_array, sq_dep_head, sq_dep_tail, sq_dep_tail_en, sq_dep_full, sq_array_at_head = \
-            self._make_dep_array(em, "sq", n_sq_entries, sq_access_en, sq_write_value)
 
-        pq_bb_executed = self._make_bb_ports(em, "pq", ~pq_dep_full)
+        # Successor dep array first, so sq_bb_executed is available to mark the
+        # predecessor array's dependency boundaries.
+        sq_array, sq_dep_head, sq_dep_tail, sq_dep_tail_en, sq_dep_full, sq_array_at_head, _ = \
+            self._make_dep_array(em, "sq", n_sq_entries, sq_access_en, sq_write_value)
         sq_bb_executed = self._make_bb_ports(em, "sq", ~sq_dep_full)
-        
-        em.add_assignment(pq_dep_tail_en, pq_bb_executed)
-        em.add_assignment(sq_dep_tail_en, sq_bb_executed)
-        
-        # TODO: What if the BBs execute at the same time? 
-        # -> For now not possible
-        
+            
         pq_executed_last = Logic(em, "pq_executed_last", "r")
         sq_executed_last = Logic(em, "sq_executed_last", "r")
-        
+
+        # Predecessor dep array: pushes write 0; each successor BB execution marks
+        # the most-recent predecessor entry as a definitive (per-successor)
+        # boundary. `pq_mark_consumed` flags a successor whose boundary predecessor
+        first_sq_bb = Logic(em, "first_sq_bb")
+        em.add_assignment(first_sq_bb, ~sq_executed_last & sq_bb_executed)
+        # had already retired, so the disparity takes an extra decrement.
+        pq_array, pq_dep_head, pq_dep_tail, pq_dep_tail_en, pq_dep_full, pq_array_at_head, pq_mark_consumed = \
+            self._make_dep_array(em, "pq", n_pq_entries, pq_done_en, None, mark_en=first_sq_bb)
+        pq_bb_executed = self._make_bb_ports(em, "pq", ~pq_dep_full)
+
+        em.add_assignment(pq_dep_tail_en, pq_bb_executed)
+        em.add_assignment(sq_dep_tail_en, sq_bb_executed)
+
+        # TODO: What if the BBs execute at the same time?
+        # -> For now not possible
+
+
         em.add_assignment(pq_executed_last, ~sq_bb_executed & (pq_bb_executed | pq_executed_last))
         em.add_assignment(sq_executed_last, ~pq_bb_executed & (sq_bb_executed | sq_executed_last))
-        
+
         # At reset no predecessor has executed yet, so a successor that genuinely
         # goes first must stamp its dep entry with 0 (sq_write_value = pq_executed_last)
         # and keep its free pass, rather than be marked dependent on a predecessor
         # that never ran.
         pq_executed_last.regInit(init=0)
         sq_executed_last.regInit(init=1)
-        
-        em.add_assignment(pq_write_value, sq_executed_last)
+
         em.add_assignment(sq_write_value, pq_executed_last)
 
         pq_dep_addr_width = math.ceil(math.log2(n_pq_entries))
@@ -417,58 +446,5 @@ class DependencyChecker(Generator):
         self.dep_full = Logic(em, "dep_full", "w")
         em.add_assignment(self.dep_full, pq_dep_full | sq_dep_full)
 
-        # --- speculative-decrement undo ---------------------------------------
-        # The eager decrement (in `generate`) reads pq_array_at_head. When the head
-        # is the most-recent P that bit is still a placeholder '1', so the
-        # decrement is a guess that this P is the last of its group. We only learn
-        # the truth once the next item executes:
-        #   * a successor (S) executes  -> the P really was last, keep it.
-        #   * another predecessor (P) executes first -> it was not last, undo.
-        # The decrement must stay eager (not deferred): a predecessor done has to
-        # cancel the successor's disparity increment in the same window, otherwise
-        # the succ-can-execute-once loop deadlocks.
-        ad_width = self.configs.access_disparity_width
-        ptr_width = pq_dep_addr_width + 1
-
-        # head is the most-recent P iff advancing it by one reaches the tail
-        # (exactly one entry occupied); only then is pq_array_at_head a placeholder.
-        pq_dep_head_plus1 = LogicVec(em, "pq_dep_head_plus1", "w", ptr_width)
-        WrapAddConst(em, pq_dep_head_plus1, pq_dep_head, 1, n_pq_entries)
-        pq_head_is_latest = Logic(em, "pq_head_is_latest", "w")
-        em.add_assignment(
-            pq_head_is_latest,
-            Val(pq_dep_head_plus1.getNameRead()) == Val(pq_dep_tail.getNameRead()),
-        )
-
-        # In the positive-lead regime every done legitimately decrements, so those
-        # are never speculative.
-        ad_base_positive = Logic(em, "ad_base_positive", "w")
-        em.add_assignment(
-            ad_base_positive, access_disparity_base > Val(1, size=ad_width)
-        )
-
-        # A done on the placeholder (latest P, no S since it) is speculative.
-        spec_dec_set = Logic(em, "spec_dec_set", "w")
-        em.add_assignment(
-            spec_dec_set,
-            pq_done_en & pq_head_is_latest & ~sq_executed_last & ~ad_base_positive,
-        )
-        # At most one speculative decrement is outstanding: the moment another item
-        # executes it is resolved. Held until then.
-        spec_dec_pending = Logic(em, "spec_dec_pending", "r")
-        em.add_assignment(
-            spec_dec_pending,
-            ~(pq_bb_executed | sq_bb_executed) & (spec_dec_pending | spec_dec_set),
-        )
-        spec_dec_pending.regInit(init=0)
-
-        # Undo when the next executed item is a predecessor (no S in between): the
-        # speculative P was not the last of its group.
-        undo_inc = Logic(em, "ad_undo_inc", "w")
-        em.add_assignment(
-            undo_inc,
-            (spec_dec_pending | spec_dec_set) & pq_bb_executed & ~sq_bb_executed,
-        )
-
-        return pq_array_at_head, sq_array_at_head, new_ad, pq_dep_addr_width, undo_inc, new_ad_behind, s_next_head
+        return pq_array_at_head, sq_array_at_head, new_ad, pq_dep_addr_width, pq_mark_consumed, new_ad_behind, s_next_head
 
