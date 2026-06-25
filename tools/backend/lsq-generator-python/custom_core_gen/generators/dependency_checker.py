@@ -20,8 +20,10 @@ class _DepArray:
     full: object           # Logic: queue full
     array_at_head: object  # Logic: boundary bit at the head slot
     mark_consumed: object  # Logic or None: mark hit an already-popped entry
+    retiring_now: object   # Logic: the lone pending entry pops this same cycle
     head_idx: object       # LogicVec: head index (addr_width)
     head_oh: object        # LogicVec: one-hot of head index (n_entries)
+    head_oh_next: object   # LogicVec: combinational next-state view of `head_oh`
     n_entries: int
 
 
@@ -30,6 +32,10 @@ class DependencyChecker(Generator):
         super().__init__(name, suffix, configs)
 
     def generate(self, em: Emitter, path_rtl, out_file: str = None) -> None:
+        assert self.configs.dep_entry_ratio == 1, (
+            "dep_entry_ratio must be 1: the dep array sizing in this generator "
+            "(n_pq_entries/n_sq_entries = pq/sq.num_entries) doesn't scale by it"
+        )
         self.ports.clear()
         crosses_bb = self.configs.pq_bb != self.configs.sq_bb
 
@@ -271,10 +277,17 @@ class DependencyChecker(Generator):
         # --- NEGATIVE-state credit events ---
         # A predecessor completing at a marked boundary head banks a credit; a
         # dependent successor arriving at the resolution head (s_next_head) spends
-        # one.
+        # one. pq.retiring_now also banks a credit: the PpSs race where the lone
+        # pending predecessor (p) retires the very cycle a successor's mark would
+        # have landed on it - p doesn't yet know S is coming, so it grants a free
+        # pass instead of leaving a literal (and unreachable, since the head has
+        # already passed it) mark for S to depend on.
         neg_incr = Logic(em, "ad_neg_incr", "w")
         neg_decr = Logic(em, "ad_neg_decr", "w")
-        em.add_assignment(neg_incr, ~is_positive & pq_done_en & pq.array_at_head)
+        em.add_assignment(
+            neg_incr,
+            ~is_positive & pq_done_en & (pq.array_at_head | self.pq_mark_raced_retire),
+        )
         em.add_assignment(neg_decr, ~is_positive & go_to_next_p)
 
         # --- POSITIVE-state boundary search (from the dep head) ---
@@ -298,16 +311,29 @@ class DependencyChecker(Generator):
         # --- POSITIVE-state AD one-hot register ---
         # Latched on entry to POSITIVE, and re-searched to the next boundary
         # whenever a new successor head arrives while already POSITIVE (the jump).
+        # Always anchored on pq.head_oh_next (not pq.head_oh): a predecessor pop
+        # can land on the very same cycle ad_oh would otherwise track/search from
+        # the head, and pq.head_oh itself only reflects the head as of the start
+        # of the cycle (pre-edge). Using the stale pre-pop head as pivot can
+        # re-find/re-track a boundary slot the head has already passed this
+        # cycle, stranding ad_oh behind the head forever. ad_oh must never lag
+        # the head - it has to move the instant the head does.
         ad_oh = LogicVec(em, "ad_oh", "r", n_pq)
+        search_pivot = LogicVec(em, "ad_search_pivot", "w", n_pq)
+        em.add_assignment(search_pivot, pq.head_oh_next.when(go_positive).else_(ad_oh))
         ad_oh_next = LogicVec(em, "ad_oh_next", "w", n_pq)
-        CyclicPriorityMasking(em, ad_oh_next, self.pq_array_next, ad_oh)
+        CyclicPriorityMasking(em, ad_oh_next, self.pq_array_next, search_pivot)
 
-        em.add_assignment(ad_oh, pq.head_oh
+        em.add_assignment(ad_oh, pq.head_oh_next
                           .when(~go_positive & ~is_positive).else_(
                               ad_oh_next.when(go_to_next_p).else_(ad_oh)))
         ad_oh.regInit(init=1)
 
         # --- Consume: pop reaches the awaited boundary -> back to NEGATIVE ---
+        # Uses the *current* head (pre-pop), not head_oh_next: this checks
+        # whether the entry about to be popped this cycle (pq_done_en) is the one
+        # ad_oh is waiting on, so it must compare against where the head IS, not
+        # where it's about to go.
         head_is_ad = Logic(em, "ad_head_is_ad", "w")
         em.add_assignment(head_is_ad, pq.head_oh == ad_oh)
         consume = Logic(em, "ad_consume", "w")
@@ -340,7 +366,15 @@ class DependencyChecker(Generator):
         em.add_assignment(credit_dec, Val(1).when(neg_decr).else_(Val(0)))
         credit_updated = LogicVec(em, "ad_credit_updated", "w", ad_width)
         em.add_assignment(credit_updated, (credit + credit_inc) - credit_dec)
-        em.add_assignment(credit, Val(0, size=ad_width).when(is_positive).else_(credit_updated))
+        # go_positive fires exactly when credit==0 and neg_decr has nothing to
+        # spend (see go_positive's definition above), so credit_updated would
+        # underflow on this very cycle; force the reset to 0 immediately using
+        # go_positive itself rather than waiting a cycle for is_positive to catch
+        # up (which would let the underflowed value land in the register first).
+        em.add_assignment(
+            credit,
+            Val(0, size=ad_width).when(is_positive | go_positive).else_(credit_updated),
+        )
         credit.regInit(init=0)
 
         # --- Disparity count: head -> ad_oh inclusive distance, +1 ---
@@ -406,19 +440,35 @@ class DependencyChecker(Generator):
             Val(em.slice_var(tail.getNameRead(), ptr_width - 1, 0))
             == Val(em.slice_var(head.getNameRead(), ptr_width - 1, 0)))
 
+        # Same-cycle race: the lone pending entry (tail-1 == head) is both the
+        # mark's target AND being popped (head_en) this very cycle. The mark
+        # write would otherwise win unconditionally and plant a stale '1' into
+        # the slot the head is leaving behind this same edge - a boundary bit
+        # nothing will ever clear (it sits behind the head until the tail wraps
+        # all the way back around), permanently stranding any AD search that
+        # later latches onto it. This is the PpSs case where P retires (p) not
+        # yet knowing a successor (S) is coming: p should grant a free pass
+        # (bank a credit) instead of leaving a literal mark for S to depend on.
+        retiring_now = Logic(em, f"{prefix}_dep_retiring_now", "w")
+        em.add_assignment(retiring_now, head_en & ~empty & (head_next == tail))
+
         mark_already_consumed = None
         if mark_en is not None:
             # Predecessor marking scheme: a push (tail_en) writes 0 (this P is not
             # yet depended on). A successor execution (mark_en) overwrites the
             # most-recent entry, tail-1, with 1 - a definitive, per-successor
             # dependency boundary - without advancing the tail. If the array is
-            # empty at the mark, tail-1 has already been popped (the predecessor
-            # finished before the successor): suppress the stray write (it would
-            # wrap behind the head) and signal an extra decrement instead.
+            # already empty at the mark, or its lone entry retires this same
+            # cycle (retiring_now), tail-1 is/becomes invalid as a mark target
+            # (the predecessor finished before, or in lockstep with, the
+            # successor): suppress the stray write and signal an extra
+            # decrement instead.
             mark_valid = Logic(em, f"{prefix}_mark_valid", "w")
-            em.add_assignment(mark_valid, mark_en & ~empty)
+            em.add_assignment(mark_valid, mark_en & ~empty & ~retiring_now)
             mark_already_consumed = Logic(em, f"{prefix}_mark_consumed", "w")
-            em.add_assignment(mark_already_consumed, mark_en & empty)
+            em.add_assignment(mark_already_consumed, mark_en & (empty | retiring_now))
+            self.pq_mark_raced_retire = Logic(em, f"{prefix}_mark_raced_retire", "w")
+            em.add_assignment(self.pq_mark_raced_retire, mark_en & retiring_now)
 
         # `array_next` mirrors the register write equation combinationally so a
         # value written this cycle is visible the same cycle (the next-state view).
@@ -469,10 +519,25 @@ class DependencyChecker(Generator):
         head_oh = LogicVec(em, f"{prefix}_dep_head_oh", "w", n_entries)
         BitsToOH(em, head_oh, head_idx)
 
+        # Same-cycle next-state view of head_oh: head_idx/head_oh are built from
+        # the registered head (pre-edge), so a pop landing this very cycle
+        # (head_en) is invisible to them until the next edge. Anything that needs
+        # "where the head is, accounting for a pop happening right now" (e.g. the
+        # AD search pivot) must use this instead, or it searches/tracks from a
+        # head position that's already one pop stale.
+        head_idx_next = LogicVec(em, f"{prefix}_dep_head_idx_next", "w", addr_width)
+        em.add_assignment(
+            head_idx_next,
+            Val(em.slice_var(head_next.getNameRead(), addr_width - 1, 0)).when(head_en).else_(head_idx),
+        )
+        head_oh_next = LogicVec(em, f"{prefix}_dep_head_oh_next", "w", n_entries)
+        BitsToOH(em, head_oh_next, head_idx_next)
+
         return _DepArray(
             array=array, array_next=array_next, head=head, tail=tail, tail_en=tail_en,
             full=full, array_at_head=array_at_head, mark_consumed=mark_already_consumed,
-            head_idx=head_idx, head_oh=head_oh, n_entries=n_entries,
+            retiring_now=retiring_now,
+            head_idx=head_idx, head_oh=head_oh, head_oh_next=head_oh_next, n_entries=n_entries,
         )
 
     def _make_s_next_head(self, em: Emitter, n_sq_entries, sq, sq_access_en, sq_bb_executed):

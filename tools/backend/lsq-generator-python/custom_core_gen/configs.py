@@ -51,7 +51,7 @@ class DependencyCheckerConfig:
     sq: "QueueConfig"
     pq_bb: int
     sq_bb: int
-    dep_entry_ratio = 2  # The ratio between the size of the dependency array and the number of entries in the queues
+    dep_entry_ratio = 1  # The ratio between the size of the dependency array and the number of entries in the queues
     
     succ_can_execute_once: bool = (
         False  # Whether this dependency checker checks for dependencies in reverse order
@@ -67,7 +67,7 @@ class DependencyCheckerConfig:
         self.sq_bb = sq_bb
         self.succ_can_execute_once = config.get("succCanExecuteOnce")
         self.access_disparity_width = config.get("AccessDisparityWidth")
-        self.dep_entry_ratio = config.get("depEntryRatio", 2)
+        self.dep_entry_ratio = config.get("depEntryRatio", 1)
 
     @staticmethod
     def from_parts(
@@ -78,7 +78,7 @@ class DependencyCheckerConfig:
         obj.sq = sq
         obj.access_disparity_width = dc_config.get("AccessDisparityWidth")
         obj.succ_can_execute_once = dc_config.get("succCanExecuteOnce")
-        obj.dep_entry_ratio = dc_config.get("depEntryRatio", 2)
+        obj.dep_entry_ratio = dc_config.get("depEntryRatio", 1)
         return obj
 
 
