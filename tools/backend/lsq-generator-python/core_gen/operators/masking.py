@@ -106,7 +106,7 @@ def CyclicPriorityMasking(em: Emitter, dout, din, base, reverse=False) -> str:
             else:
                 size = din.size
                 double_in = LogicVec(em, em.get_temp("double_in"), "w", size * 2)
-                em.add_assignment(double_in, din & din)
+                em.add_assignment(double_in, din.concat(din))
             double_out = LogicVec(em, em.get_temp("double_out"), "w", size * 2)
             em.add_assignment(
                 double_out, double_in & ~(double_in - (Val(0, size).concat(base)))
@@ -126,3 +126,51 @@ def CyclicPriorityMasking(em: Emitter, dout, din, base, reverse=False) -> str:
                         (dout, i), Val(double_out, i) | Val(double_out, i + size)
                     )
     em.add_comment("Priority Masking End\n")
+
+
+def CyclicRangeFill(em: Emitter, dout, start, end) -> None:
+    """
+    Fill every bit between two one-hot markers, going rightward (towards the LSB)
+    from `start` down to `end`, inclusive and cyclically (wrapping past the LSB
+    back to the MSB when `end` sits above `start`).
+
+    Parameters:
+        dout  (LogicVec): Destination for the filled range.
+        start (LogicVec): One-hot marker for the (inclusive) high end of the run.
+        end   (LogicVec): One-hot marker for the (inclusive) low end of the run.
+
+    This mirrors CyclicPriorityMasking's doubled-vector subtract, but ORs the run
+    back in instead of isolating the first bit:
+        double_in  = {start, start}
+        double_out = double_in | (double_in - {0, end})
+        dout[i]    = double_out[i] | double_out[i + size]
+
+    Example (size = 5):
+        start = 00100   end = 00001  ->  dout = 00111
+        start = 00001   end = 00100  ->  dout = 11101   (wraps past the LSB)
+        start = 00100   end = 00100  ->  dout = 00100   (single bit)
+    """
+    em.add_comment("Cyclic Range Fill Begin")
+    em.add_comment(f"CyclicRangeFill({dout.name}, {start.name}, {end.name})")
+    em.use_temp()
+    from core_gen.signals import LogicVec
+
+    size = start.size
+    # Doubled copy of `start` so the subtraction can wrap past the LSB.
+    double_in = LogicVec(em, em.get_temp("range_double_in"), "w", size * 2)
+    for i in range(0, size):
+        em.add_assignment((double_in, i), Val(start, i))
+        em.add_assignment((double_in, i + size), Val(start, i))
+    # Subtracting the (zero-extended) `end` marker turns the run between the two
+    # markers into ones; ORing `double_in` back in re-adds the `start` bit itself.
+    double_out = LogicVec(em, em.get_temp("range_double_out"), "w", size * 2)
+    em.add_assignment(
+        double_out, double_in | (double_in - (Val(0, size).concat(end)))
+    )
+    # Fold the two halves back together so the wrap-around bits land correctly.
+    em.add_assignment(
+        dout,
+        Val(em.slice_var(f"{double_out.getNameRead()}", size - 1, 0))
+        | Val(em.slice_var(f"{double_out.getNameRead()}", 2 * size - 1, size)),
+    )
+    em.add_comment("Cyclic Range Fill End\n")
