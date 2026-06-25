@@ -280,11 +280,15 @@ class DependencyChecker(Generator):
             em.add_assignment(mark_valid, mark_en & ~empty)
             mark_already_consumed = Logic(em, f"{prefix}_mark_consumed", "w")
             em.add_assignment(mark_already_consumed, mark_en & empty)
+
+            array_next = LogicVec(em, f"{prefix}_array_next", "w", n_entries)
             for i in range(n_entries):
-                em.add_assignment(array[i],
-                    Bit(0).when(Val(tail_oh, i) & tail_en)
+                next_bit = (Bit(0).when(Val(tail_oh, i) & tail_en)
                     .else_(Bit(1).when(Val(tail_oh, (i + 1) % n_entries) & mark_valid)
                     .else_(array[i])))
+                em.add_assignment(array[i], next_bit)
+                em.add_assignment((array_next, i), next_bit)
+            self.pq_array_next = array_next
         elif isinstance(write_tuple, tuple):
             prev_val, curr_val = write_tuple
             for i in range(n_entries):
