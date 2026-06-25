@@ -1,11 +1,28 @@
 import math
 from core_gen.emitters import Emitter
 from core_gen.signals import *
-from core_gen.operators import BitsToOH, CyclicPriorityMasking, CyclicRightShift, MuxLookUp, OHToBits, Reduce, WrapAddConst, WrapSub
+from core_gen.operators import BitsToOH, CyclicPriorityMasking, CyclicRightShift, MarkBetween, MuxLookUp, OHToBits, Reduce, WrapAdd, WrapAddConst, WrapSub
 from core_gen.ir import BinOp, Bin, Val, Bit, CustomStatement
 from custom_core_gen.configs import DependencyCheckerConfig
 from custom_core_gen.generators.generator import Generator
 from functools import reduce
+from dataclasses import dataclass
+
+
+@dataclass
+class _DepArray:
+    """Bundle of the signals produced by `_make_dep_array` for one dep queue."""
+    array: object          # LogicArray: the boundary/marking bits
+    array_next: object     # LogicVec: combinational next-state view of `array`
+    head: object           # LogicVec: head pointer (ptr_width)
+    tail: object           # LogicVec: tail pointer (ptr_width)
+    tail_en: object        # Logic: tail push enable
+    full: object           # Logic: queue full
+    array_at_head: object  # Logic: boundary bit at the head slot
+    mark_consumed: object  # Logic or None: mark hit an already-popped entry
+    head_idx: object       # LogicVec: head index (addr_width)
+    head_oh: object        # LogicVec: one-hot of head index (n_entries)
+    n_entries: int
 
 
 class DependencyChecker(Generator):
@@ -51,102 +68,40 @@ class DependencyChecker(Generator):
 
         conflict = Logic(em, "conflict", "w")
 
+        n_pq_entries = self.configs.pq.num_entries
+        check_mask = LogicVec(em, "check_mask", "w", n_pq_entries)
+
         if not crosses_bb:
-            access_disparity = LogicVec(
-                em, "access_disparity", "r", ad_width, is_signed=True
-            )
-            # if the successor port executes sequentially before the predcessor port,
-            # initialise the access disparity to 0 (implying the pred already executed once,
-            # so there is nothing to check); otherwise 1 (one P access still to check)
-            ad_initial_value = 1 if not (self.configs.succ_can_execute_once) else 0
-            access_disparity.regInit(init=ad_initial_value)
-            inc_ad = LogicVec(
-                em,
-                "inc_access_disparity",
-                "w",
-                self.configs.access_disparity_width,
-                is_signed=True,
-            )
-            dec_ad = LogicVec(
-                em,
-                "dec_access_disparity",
-                "w",
-                self.configs.access_disparity_width,
-                is_signed=True,
-            )
-            em.add_assignment(inc_ad, Val(1).when(sq_access_en_i).else_(Val(0)))
-            em.add_assignment(dec_ad, Val(1).when(pq_done_en_i).else_(Val(0)))
-            em.add_assignment(access_disparity, (access_disparity + inc_ad) - dec_ad)
+            access_disparity = self._disparity_non_cross(em, ad_width, sq_access_en_i, pq_done_en_i)
+            # Same-BB: AD is an integer count of pending predecessor accesses to
+            # check. Build a head-relative run of 1s (bit i set iff i < AD) and
+            # rotate it into the physical-entry frame by the done pointer.
+            ones = LogicVec(em, "ones", "w", n_pq_entries)
+            for i in range(n_pq_entries):
+                em.add_assignment(
+                    (ones, i),
+                    Bit(1).when(Val(i, size=ad_width) < access_disparity).else_(Bit(0)),
+                )
+            CyclicRightShift(em, check_mask, ones, pq_done_i)
         else:
-            access_disparity = LogicVec(
-                em, "access_disparity", "w", ad_width, is_signed=True
+            # Cross-BB: a small two-state machine drives the disparity (see
+            # `_disparity_cross`). It returns the integer count (for the
+            # allocation/sent gates) plus the AD boundary one-hot and the dep-head
+            # one-hot. The window to check is every entry from the dep head INDEX
+            # (which is also the PQ queue start index, i.e. already the physical
+            # frame) up to and including the AD boundary - filled directly with
+            # MarkBetween, no done-pointer rotation needed. In the NEGATIVE state
+            # there is nothing to check, so the mask is forced to 0.
+            access_disparity, ad_oh, pq_head_oh, is_positive = self._disparity_cross(
+                em, ad_width, pq_done_en_i, sq_access_en_i
             )
-            access_disparity_base = LogicVec(
-                em, "access_disparity_base", "r", ad_width, is_signed=True
-            )
-            access_disparity_base.regInit(init=0)
-
-            inc_ad = LogicVec( em, "inc_access_disparity", "w", self.configs.access_disparity_width, is_signed=True)
-            dec_ad = LogicVec(em, "dec_access_disparity", "w", self.configs.access_disparity_width, is_signed=True)
-            ad_decr = LogicVec(em, "ad_decr", "w", ad_width, is_signed=True)
-            ad_incr = LogicVec(em, "ad_incr", "w", ad_width, is_signed=True)
-
-            pq_array_at_head, sq_array_at_head, new_ad_bits, pq_dep_addr_width, mark_extra_dec, new_ad_behind, s_next_head = \
-                self.generate_dep_arrays(em, pq_done_en_i, sq_access_en_i, ad_incr, access_disparity_base)
-
-            # Decrement when a marked boundary predecessor at the head completes:
-            # the successor that marked it is now satisfied. A successor whose
-            # boundary predecessor had already retired (mark_extra_dec) takes its
-            # decrement immediately instead. Both can occur in the same cycle, so
-            # the disparity can drop by up to two. Boundaries are now definitive
-            # (set only by an actual successor), so no speculative undo is needed.
-            dec_boundary = LogicVec(em, "dec_boundary", "w", ad_width, is_signed=True)
-            em.add_assignment(dec_boundary, Val(1).when(pq_done_en_i & pq_array_at_head).else_(Val(0)))
-            dec_extra = LogicVec(em, "dec_extra", "w", ad_width, is_signed=True)
-            em.add_assignment(dec_extra, Val(1).when(mark_extra_dec).else_(Val(0)))
-#            em.add_assignment(dec_extra, Val(0))
-            em.add_assignment(dec_ad, dec_boundary + dec_extra)
-            em.add_assignment(ad_decr, access_disparity_base - dec_ad)
-
-            em.add_assignment(ad_incr, ad_decr + Val(1))
-
-            ad_final = LogicVec(em, "ad_final_val", "w", ad_width, is_signed=True)
-            em.add_assignment(ad_final, ad_incr.when(sq_array_at_head).else_(ad_decr))
-
-            n_pq_entries = self.configs.pq.num_entries * self.configs.dep_entry_ratio
-            ad_pos = LogicVec(em, "pq_new_ad_pos", "w", ad_width, is_signed=True)
-            pad = ad_width - pq_dep_addr_width
-            if pad > 0:
-                em.add_assignment(ad_pos, Val(0, pad).concat(new_ad_bits) + Val(1))
-            else:
-                em.add_assignment(ad_pos, new_ad_bits + Val(1))
-            ad_neg = LogicVec(em, "pq_new_ad_neg", "w", ad_width, is_signed=True)
-            em.add_assignment(ad_neg, ad_pos - Val(n_pq_entries, size=ad_width))
-            ad_jumped = LogicVec(em, "pq_new_ad_widened", "w", ad_width, is_signed=True)
-            em.add_assignment(ad_jumped, ad_neg.when(new_ad_behind).else_(ad_pos))
-
-            ad_next = LogicVec(em, "ad_next", "w", ad_width, is_signed=True)
-            em.add_assignment(ad_next, ad_final.when(ad_final <= Val(0, size=ad_width)).else_(ad_jumped))
-            em.add_assignment(access_disparity, ad_next)
-
-            # The eager decrement (`ad_decr`) always applies. The +1 increment and
-            # the boundary jump it implies (`access_disparity`) only get latched on
-            # the cycle the successor's dep-array head actually advances; any other
-            # cycle just carries the decrement-only value forward.
-            em.add_assignment(access_disparity_base, access_disparity.when(s_next_head).else_(ad_decr))
-
-
-        check_mask = LogicVec(em, "check_mask", "w", self.configs.pq.num_entries)
-        ones = LogicVec(em, "ones", "w", self.configs.pq.num_entries)
-        # generate access_disparity 1's for the check mask
-        # AD counts how many P accesses to check, so bit i is set iff i < AD
-        # (AD = 0 checks no entries, AD = n checks entries 0..n-1).
-        for i in range(self.configs.pq.num_entries):
-            em.add_assignment(
-                (ones, i),
-                Bit(1).when(Val(i, size=ad_width) < access_disparity).else_(Bit(0)),
-            )
-        CyclicRightShift(em, check_mask, ones, pq_done_i)
+            span = LogicVec(em, "check_span", "w", n_pq_entries)
+            MarkBetween(em, span, ad_oh, pq_head_oh)
+            for i in range(n_pq_entries):
+                em.add_assignment(
+                    (check_mask, i),
+                    Val(span, i).when(is_positive).else_(Bit(0)),
+                )
 
         conflicts = LogicVec(em, "conflicts", "w", self.configs.pq.num_entries)
         for i in range(self.configs.pq.num_entries):
@@ -208,7 +163,7 @@ class DependencyChecker(Generator):
             corresponding_entry_allocated,
             ~conflict | corresponding_entry_sent,
         ]
-        
+
         # corresponding_entry_allocated requires pq_length_i >= access_disparity, and a
         # successor access bumps the disparity once more, so the largest value the
         # register can reach is num_entries + 1 (access_disparity <= pq_length_i and
@@ -224,7 +179,203 @@ class DependencyChecker(Generator):
         )
 
         self._write_to_file(em, path_rtl, out_file)
-        
+
+    # ===----------------------------------------------------------------------===
+    # Access-disparity computation
+    # ===----------------------------------------------------------------------===
+
+    def _disparity_non_cross(self, em: Emitter, ad_width, sq_access_en, pq_done_en):
+        """Same-BB disparity: a simple signed up/down counter. +1 per successor
+        access, -1 per predecessor completion."""
+        access_disparity = LogicVec(em, "access_disparity", "r", ad_width, is_signed=True)
+        # If the successor port executes sequentially before the predecessor port,
+        # initialise the disparity to 0 (the pred already executed once, nothing to
+        # check); otherwise 1 (one P access still to check).
+        ad_initial_value = 1 if not self.configs.succ_can_execute_once else 0
+        access_disparity.regInit(init=ad_initial_value)
+
+        inc_ad = LogicVec(em, "inc_access_disparity", "w", ad_width, is_signed=True)
+        dec_ad = LogicVec(em, "dec_access_disparity", "w", ad_width, is_signed=True)
+        em.add_assignment(inc_ad, Val(1).when(sq_access_en).else_(Val(0)))
+        em.add_assignment(dec_ad, Val(1).when(pq_done_en).else_(Val(0)))
+        em.add_assignment(access_disparity, (access_disparity + inc_ad) - dec_ad)
+        return access_disparity
+
+    def _disparity_cross(self, em: Emitter, ad_width, pq_done_en, sq_access_en):
+        """Cross-BB disparity, driven by a two-state machine.
+
+        NEGATIVE state (an unsigned `credit` counter, init 0): the successor
+        stream is ahead of (or level with) the predecessor stream, so nothing is
+        checked (disparity = 0). `pq_done_en` at a marked head increments the
+        credit, a successor at a marked SQ head decrements it. When the credit is
+        already 0 and a successor decrement arrives with no matching increment,
+        the predecessor stream has just produced a dependency the successor must
+        wait on: switch to the POSITIVE state.
+
+        POSITIVE state (an `ad_oh` one-hot pointing at the awaited predecessor
+        dependency boundary in the PQ dep array): the window the successor must
+        check is every marked predecessor entry from the dep head up to and
+        including `ad_oh`. On `s_next_head` (a new successor becomes the head) the
+        boundary is re-searched from the head. When `pq_done_en` pops the very
+        entry `ad_oh` points at, that dependency is satisfied: return to the
+        NEGATIVE state with credit reset to 0.
+
+        The returned `access_disparity` is the head-relative count of pending
+        predecessor entries to check: 0 in NEGATIVE, (distance head->ad_oh)+1 in
+        POSITIVE. That integer feeds the shared check-mask/conflict block."""
+        n_pq = self.configs.pq.num_entries
+        pq_addr_width = math.ceil(math.log2(n_pq))
+        n_sq = self.configs.sq.num_entries
+        sq_addr_width = math.ceil(math.log2(n_sq))
+
+        pq, sq, sq_bb_executed = self._build_dep_arrays(em, pq_done_en, sq_access_en)
+
+        # --- State registers ---
+        is_positive = Logic(em, "ad_is_positive", "r")
+        credit = LogicVec(em, "ad_credit", "r", ad_width)
+
+        # --- s_next_head: a new successor head has arrived ---
+        # Essentially `sq_access_en` (a send advances the access head to the next
+        # successor), EXCEPT when that send empties the queue: then there is no new
+        # head yet, so the pulse is deferred until the queue is repopulated by the
+        # next successor BB execution. `awaiting_head` is a sticky flag that
+        # remembers a send-into-empty so the deferred pulse fires from registered
+        # state (avoiding the same-cycle push race that hid the original signal).
+        s_next_head = self._make_s_next_head(em, n_sq, sq, sq_access_en, sq_bb_executed)
+
+        # --- Resolution head (the "third" SQ pointer) ---
+        # The SQ access head advances when the successor's memory access is
+        # *allowed* - which is exactly what this checker gates, so it cannot be
+        # used to decide whether a successor depends on a predecessor. A separate
+        # resolution pointer walks the committed successors one at a time, deciding
+        # each one's dependency *before* any access. It advances only when the
+        # current successor is resolved (see `res_advance`). The dependency bit is
+        # read from the SQ dep array at this pointer.
+        sq_res_head = LogicVec(em, "sq_res_head", "r", sq_addr_width + 1)
+        sq_res_idx = LogicVec(em, "sq_res_idx", "w", sq_addr_width)
+        em.add_assignment(sq_res_idx,
+            Val(em.slice_var(sq_res_head.getNameRead(), sq_addr_width - 1, 0)))
+        # Does the successor under the resolution head depend on a predecessor?
+        # Read the next-state SQ array so the marking written the same cycle the
+        # successor is pushed (sq_write_value at the push edge) is visible now -
+        # without this the dep bit lags a cycle and the decrement is missed.
+        cur_dep = Logic(em, "ad_cur_dep", "w")
+        cur_dep_expr = Bit(0)
+        for j in range(n_sq - 1, -1, -1):
+            cur_dep_expr = Val(sq.array_next, j).when(
+                sq_res_idx == Val(j, size=sq_addr_width)
+            ).else_(cur_dep_expr)
+        em.add_assignment(cur_dep, cur_dep_expr)
+
+        # --- NEGATIVE-state credit events ---
+        # A predecessor completing at a marked boundary head banks a credit; a
+        # dependent successor arriving at the resolution head (s_next_head) spends
+        # one.
+        neg_incr = Logic(em, "ad_neg_incr", "w")
+        neg_decr = Logic(em, "ad_neg_decr", "w")
+        em.add_assignment(neg_incr, pq_done_en & pq.array_at_head)
+        em.add_assignment(neg_decr, ~is_positive & s_next_head & cur_dep)
+
+        # --- POSITIVE-state boundary search (from the dep head) ---
+        # Search the next-state PQ array so a boundary marked this same cycle is
+        # visible immediately (no stale read). The first marked entry at/after the
+        # head is the dependency boundary the current successor must wait for. If
+        # the search finds nothing the awaited predecessor already completed (it
+        # retired before the successor marked it), so there is nothing to wait on.
+        boundary_oh = LogicVec(em, "ad_boundary_oh", "w", n_pq)
+        CyclicPriorityMasking(em, boundary_oh, self.pq_array_next, pq.head_oh)
+        boundary_found = Logic(em, "ad_boundary_found", "w")
+        Reduce(em, boundary_found, boundary_oh, BinOp.OR)
+
+        # Disposition of a dependent successor arriving in NEGATIVE (`neg_decr`):
+        #   * a banked credit covers it (a predecessor got ahead)  -> spend credit;
+        #   * else a pending boundary exists                       -> go POSITIVE;
+        #   * else (no credit, no boundary)                        -> already
+        #     satisfied (predecessor retired unmarked), a no-op.
+        credit_nonzero = Logic(em, "ad_credit_nonzero", "w")
+        em.add_assignment(credit_nonzero, credit != Val(0, size=ad_width))
+        go_positive = Logic(em, "ad_go_positive", "w")
+        em.add_assignment(
+            go_positive,
+            neg_decr & ~credit_nonzero & boundary_found,
+        )
+        spend_credit = Logic(em, "ad_spend_credit", "w")
+        em.add_assignment(spend_credit, neg_decr & credit_nonzero)
+
+        # --- POSITIVE-state AD one-hot register ---
+        # Latched on entry to POSITIVE, and re-searched to the next boundary
+        # whenever a new successor head arrives while already POSITIVE (the jump).
+        do_search = Logic(em, "ad_do_search", "w")
+        em.add_assignment(do_search, go_positive | (is_positive & s_next_head))
+        ad_oh = LogicVec(em, "ad_oh", "r", n_pq)
+        ad_oh_next = LogicVec(em, "ad_oh_next", "w", n_pq)
+        for i in range(n_pq):
+            em.add_assignment(
+                (ad_oh_next, i),
+                Val(boundary_oh, i).when(do_search).else_(Val(ad_oh, i)),
+            )
+        em.add_assignment(ad_oh, ad_oh_next)
+        ad_oh.regInit(init=0)
+
+        # --- Consume: pop reaches the awaited boundary -> back to NEGATIVE ---
+        head_is_ad = Logic(em, "ad_head_is_ad", "w")
+        em.add_assignment(head_is_ad, Val(pq.head_oh.getNameRead()) == Val(ad_oh.getNameRead()))
+        consume = Logic(em, "ad_consume", "w")
+        em.add_assignment(consume, is_positive & pq_done_en & head_is_ad)
+
+        # --- Resolution-head advance ---
+        # One new successor head per `s_next_head` pulse, so the resolution pointer
+        # simply steps once per pulse.
+        sq_res_head_next = LogicVec(em, "sq_res_head_next", "w", sq_addr_width + 1)
+        WrapAddConst(em, sq_res_head_next, sq_res_head, 1, n_sq)
+        em.add_assignment(sq_res_head, sq_res_head_next)
+        sq_res_head.regInit(init=0, enable=s_next_head)
+
+        # --- State register updates ---
+        is_positive_next = Logic(em, "ad_is_positive_next", "w")
+        em.add_assignment(
+            is_positive_next,
+            Bit(0).when(consume).else_(Bit(1).when(go_positive).else_(is_positive)),
+        )
+        em.add_assignment(is_positive, is_positive_next)
+        is_positive.regInit(init=0)
+
+        # Credit banks marked-predecessor completions and is spent only when a
+        # dependent successor is actually covered (`spend_credit`); a decrement that
+        # goes POSITIVE or is a no-op does NOT touch the credit, so it never
+        # underflows. Reset to 0 when consuming back into NEGATIVE.
+        credit_next = LogicVec(em, "ad_credit_next", "w", ad_width)
+        credit_inc = LogicVec(em, "ad_credit_inc", "w", ad_width)
+        credit_dec = LogicVec(em, "ad_credit_dec", "w", ad_width)
+        em.add_assignment(credit_inc, Val(1).when(neg_incr).else_(Val(0)))
+        em.add_assignment(credit_dec, Val(1).when(spend_credit).else_(Val(0)))
+        em.add_assignment(
+            credit_next,
+            Val(0, size=ad_width).when(consume).else_((credit + credit_inc) - credit_dec),
+        )
+        em.add_assignment(credit, credit_next)
+        credit.regInit(init=0)
+
+        # --- Head-relative distance to the boundary -> integer disparity ---
+        ad_idx_abs = LogicVec(em, "ad_idx_abs", "w", pq_addr_width)
+        OHToBits(em, ad_idx_abs, ad_oh)
+        ad_dist = LogicVec(em, "ad_dist", "w", pq_addr_width)
+        WrapSub(em, ad_dist, ad_idx_abs, pq.head_idx, n_pq)
+
+        access_disparity = LogicVec(em, "access_disparity", "w", ad_width, is_signed=True)
+        ad_count = LogicVec(em, "ad_count", "w", ad_width, is_signed=True)
+        pad = ad_width - pq_addr_width
+        if pad > 0:
+            em.add_assignment(ad_count, Val(0, pad).concat(ad_dist) + Val(1))
+        else:
+            em.add_assignment(ad_count, ad_dist + Val(1))
+        # POSITIVE -> the window [head .. ad_oh] inclusive (count); NEGATIVE -> 0.
+        em.add_assignment(
+            access_disparity,
+            ad_count.when(is_positive).else_(Val(0, size=ad_width)),
+        )
+        return access_disparity, ad_oh, pq.head_oh, is_positive
+
     def _make_bb_ports(self, em: Emitter, prefix: str, ready):
         valid_i = self._add_port(Logic(em, f"{prefix}_bb_valid", "i"))
         ready_o = self._add_port(Logic(em, f"{prefix}_bb_ready", "o"))
@@ -281,7 +432,12 @@ class DependencyChecker(Generator):
             mark_already_consumed = Logic(em, f"{prefix}_mark_consumed", "w")
             em.add_assignment(mark_already_consumed, mark_en & empty)
 
-            array_next = LogicVec(em, f"{prefix}_array_next", "w", n_entries)
+        # `array_next` mirrors the register write equation combinationally so a
+        # value written this cycle is visible the same cycle (the next-state view).
+        # It avoids the stale read where a bit set on the push/mark edge is not yet
+        # in the register when something else reads it that very cycle.
+        array_next = LogicVec(em, f"{prefix}_array_next", "w", n_entries)
+        if mark_en is not None:
             for i in range(n_entries):
                 next_bit = (Bit(0).when(Val(tail_oh, i) & tail_en)
                     .else_(Bit(1).when(Val(tail_oh, (i + 1) % n_entries) & mark_valid)
@@ -292,12 +448,16 @@ class DependencyChecker(Generator):
         elif isinstance(write_tuple, tuple):
             prev_val, curr_val = write_tuple
             for i in range(n_entries):
-                em.add_assignment(array[i], curr_val.when(Val(tail_oh, i) & tail_en)
-                                  .else_((prev_val).when(Val(tail_oh, (i + 1) % n_entries) & tail_en)
-                                  .else_(array[i])))
+                next_bit = (curr_val.when(Val(tail_oh, i) & tail_en)
+                    .else_((prev_val).when(Val(tail_oh, (i + 1) % n_entries) & tail_en)
+                    .else_(array[i])))
+                em.add_assignment(array[i], next_bit)
+                em.add_assignment((array_next, i), next_bit)
         else:
             for i in range(n_entries):
-                em.add_assignment(array[i], write_tuple.when(Val(tail_oh, i) & tail_en).else_(array[i]))
+                next_bit = write_tuple.when(Val(tail_oh, i) & tail_en).else_(array[i])
+                em.add_assignment(array[i], next_bit)
+                em.add_assignment((array_next, i), next_bit)
 
         array.regInit()
 
@@ -314,16 +474,42 @@ class DependencyChecker(Generator):
         array_at_head = Logic(em, f"{prefix}_array_at_head", "w")
         MuxLookUp(em, array_at_head, array, head_idx)
 
-        return array, head, tail, tail_en, full, array_at_head, mark_already_consumed
+        # One-hot of the head index, used by the cross-BB state machine to anchor
+        # the AD one-hot and to detect when a pop consumes the AD boundary.
+        head_oh = LogicVec(em, f"{prefix}_dep_head_oh", "w", n_entries)
+        BitsToOH(em, head_oh, head_idx)
 
-    def _make_s_next_head(self, em: Emitter, n_sq_entries, sq_dep_head, sq_dep_tail,
-                          sq_not_empty, sq_access_en, sq_bb_executed):
+        return _DepArray(
+            array=array, array_next=array_next, head=head, tail=tail, tail_en=tail_en,
+            full=full, array_at_head=array_at_head, mark_consumed=mark_already_consumed,
+            head_idx=head_idx, head_oh=head_oh, n_entries=n_entries,
+        )
+
+    def _make_s_next_head(self, em: Emitter, n_sq_entries, sq, sq_access_en, sq_bb_executed):
+        """A pulse marking that a new successor head has become available.
+
+        It coincides with `sq_access_en` (the send that advances the access head),
+        except when that send empties the queue: there is no new head yet, so the
+        pulse is deferred until the next successor BB execution repopulates the
+        queue. `awaiting_head` is a sticky register that records "a send drained
+        the queue"; the deferred pulse then fires from this registered state on the
+        next push, sidestepping the same-cycle push race (head!=tail is already
+        true the cycle the push happens, which hid the original combinational
+        signal)."""
         sq_dep_addr_width = math.ceil(math.log2(n_sq_entries))
+        sq_dep_head = sq.head
+        sq_dep_tail = sq.tail
+
+        sq_not_empty = Logic(em, "sq_dep_not_empty", "w")
+        em.add_assignment(
+            sq_not_empty,
+            Val(sq_dep_head.getNameRead()) != Val(sq_dep_tail.getNameRead()),
+        )
+
         sq_dep_head_after_pop = LogicVec(
             em, "sq_dep_head_after_pop", "w", sq_dep_addr_width + 1
         )
         WrapAddConst(em, sq_dep_head_after_pop, sq_dep_head, 1, n_sq_entries)
-
         sq_not_empty_after_pop = Logic(em, "sq_dep_not_empty_after_pop", "w")
         em.add_assignment(
             sq_not_empty_after_pop,
@@ -331,46 +517,66 @@ class DependencyChecker(Generator):
             & (Val(sq_dep_head_after_pop.getNameRead()) != Val(sq_dep_tail.getNameRead())),
         )
 
+        # A send that leaves the queue empty (not_empty now, empty after the pop)
+        # has no new head to offer yet.
+        send_into_empty = Logic(em, "sq_send_into_empty", "w")
+        em.add_assignment(send_into_empty, sq_access_en & sq_not_empty & ~sq_not_empty_after_pop)
+
+        # Sticky: set on send-into-empty, cleared once the deferred pulse fires.
+        # Initialised to 1: at reset the queue is empty, so the first successor BB
+        # execution is itself a "new head from empty" and must pulse s_next_head.
+        awaiting_head = Logic(em, "sq_awaiting_head", "r")
+        deferred_pulse = Logic(em, "sq_deferred_head", "w")
+        em.add_assignment(deferred_pulse, awaiting_head & sq_bb_executed)
+        em.add_assignment(
+            awaiting_head,
+            Bit(1).when(send_into_empty).else_(Bit(0).when(deferred_pulse).else_(awaiting_head)),
+        )
+        awaiting_head.regInit(init=1)
+
         s_next_head = Logic(em, "s_next_head", "w")
         em.add_assignment(
             s_next_head,
-            (sq_access_en & sq_not_empty_after_pop) | (~sq_not_empty & sq_bb_executed),
+            (sq_access_en & sq_not_empty_after_pop) | deferred_pulse,
         )
         return s_next_head
 
-    def generate_dep_arrays(self, em: Emitter, pq_done_en, sq_access_en, access_disparity, access_disparity_base):
-        n_pq_entries = self.configs.pq.num_entries * self.configs.dep_entry_ratio
-        n_sq_entries = self.configs.sq.num_entries * self.configs.dep_entry_ratio
+    def _build_dep_arrays(self, em: Emitter, pq_done_en, sq_access_en):
+        """Instantiate the predecessor/successor dependency arrays and the few
+        derived signals the cross-BB state machine consumes. Returns the two
+        `_DepArray` bundles plus `s_next_head` (next-cycle a new SQ head exists).
 
-        
+        The PQ array marks a definitive per-successor dependency boundary (a 1)
+        on the most-recent predecessor entry each time a successor BB executes;
+        the SQ array tracks which successors must actually check (0 = went
+        before any predecessor, so no dependency)."""
+        # dep_entry_ratio temporarily hardcoded to 1 (see generate()).
+        n_pq_entries = self.configs.pq.num_entries
+        n_sq_entries = self.configs.sq.num_entries
+
         sq_write_value = Logic(em, "sq_write_value", "w")
 
         # Successor dep array first, so sq_bb_executed is available to mark the
         # predecessor array's dependency boundaries.
-        sq_array, sq_dep_head, sq_dep_tail, sq_dep_tail_en, sq_dep_full, sq_array_at_head, _ = \
-            self._make_dep_array(em, "sq", n_sq_entries, sq_access_en, sq_write_value)
-        sq_bb_executed = self._make_bb_ports(em, "sq", ~sq_dep_full)
-            
+        sq = self._make_dep_array(em, "sq", n_sq_entries, sq_access_en, sq_write_value)
+        sq_bb_executed = self._make_bb_ports(em, "sq", ~sq.full)
+
         pq_executed_last = Logic(em, "pq_executed_last", "r")
         sq_executed_last = Logic(em, "sq_executed_last", "r")
 
-        # Predecessor dep array: pushes write 0; each successor BB execution marks
-        # the most-recent predecessor entry as a definitive (per-successor)
-        # boundary. `pq_mark_consumed` flags a successor whose boundary predecessor
+        # Predecessor dep array: pushes write 0; the first successor BB execution
+        # after a predecessor marks the most-recent predecessor entry as a
+        # definitive (per-successor) boundary.
         first_sq_bb = Logic(em, "first_sq_bb")
         em.add_assignment(first_sq_bb, ~sq_executed_last & sq_bb_executed)
-        # had already retired, so the disparity takes an extra decrement.
-        pq_array, pq_dep_head, pq_dep_tail, pq_dep_tail_en, pq_dep_full, pq_array_at_head, pq_mark_consumed = \
-            self._make_dep_array(em, "pq", n_pq_entries, pq_done_en, None, mark_en=first_sq_bb)
-        pq_bb_executed = self._make_bb_ports(em, "pq", ~pq_dep_full)
+        pq = self._make_dep_array(em, "pq", n_pq_entries, pq_done_en, None, mark_en=first_sq_bb)
+        pq_bb_executed = self._make_bb_ports(em, "pq", ~pq.full)
 
-        em.add_assignment(pq_dep_tail_en, pq_bb_executed)
-        em.add_assignment(sq_dep_tail_en, sq_bb_executed)
+        em.add_assignment(pq.tail_en, pq_bb_executed)
+        em.add_assignment(sq.tail_en, sq_bb_executed)
 
         # TODO: What if the BBs execute at the same time?
         # -> For now not possible
-
-
         em.add_assignment(pq_executed_last, ~sq_bb_executed & (pq_bb_executed | pq_executed_last))
         em.add_assignment(sq_executed_last, ~pq_bb_executed & (sq_bb_executed | sq_executed_last))
 
@@ -380,75 +586,10 @@ class DependencyChecker(Generator):
         # that never ran.
         pq_executed_last.regInit(init=0)
         sq_executed_last.regInit(init=1)
-
         em.add_assignment(sq_write_value, pq_executed_last)
 
-        pq_dep_addr_width = math.ceil(math.log2(n_pq_entries))
-
-        # The successor dep queue is empty when its head and tail pointers coincide;
-        # an empty queue has no head entry, so it must not raise the disparity.
-        sq_not_empty = Logic(em, "sq_dep_not_empty", "w")
-        em.add_assignment(
-            sq_not_empty,
-            Val(sq_dep_head.getNameRead()) != Val(sq_dep_tail.getNameRead()),
-        )
-
-        s_next_head = self._make_s_next_head(
-            em, n_sq_entries, sq_dep_head, sq_dep_tail, sq_not_empty,
-            sq_access_en, sq_bb_executed,
-        )
-
-        # AD now counts how many P accesses to check (one more than the head-relative
-        # distance to the boundary), so the search must start at AD - 1 to land on the
-        # same absolute boundary as before.
-        ad_search_basis = LogicVec(
-            em, "ad_search_basis", "w", self.configs.access_disparity_width, is_signed=True
-        )
-        em.add_assignment(ad_search_basis, access_disparity - Val(1))
-        ad_idx = LogicVec(em, "ad_idx", "w", pq_dep_addr_width)
-        # ad_search_basis is `signed` in VHDL; slicing it yields `signed`, not
-        # `std_logic_vector`, so an explicit cast is required on the VHDL side.
-        em.add_custom_statement(CustomStatement(
-            f"{ad_idx.getNameWrite()} <= std_logic_vector({ad_search_basis.getNameRead()}({pq_dep_addr_width - 1} downto 0));",
-            f"assign {ad_idx.getNameWrite()} = {ad_search_basis.getNameRead()}[{pq_dep_addr_width - 1}:0];",
-        ))
-        ad_oh = LogicVec(em, "ad_oh", "w", n_pq_entries)
-        BitsToOH(em, ad_oh, ad_idx)
-
-        pq_masked = LogicVec(em, "pq_masked", "w", n_pq_entries)
-        CyclicPriorityMasking(em, pq_masked, pq_array, ad_oh)
-
-        # Absolute position (within the dep array) of the next dependency boundary.
-        new_ad_abs = LogicVec(em, "new_ad_abs", "w", pq_dep_addr_width)
-        OHToBits(em, new_ad_abs, pq_masked)
-
-        # Make it relative to the queue start (the dep array head), i.e. the cyclic
-        # distance from the head to the boundary. access_disparity is consumed as a
-        # count from the queue's done pointer, so it must be head-relative, not an
-        # absolute dep-array index.
-        pq_dep_head_idx = LogicVec(em, "pq_dep_head_idx_rel", "w", pq_dep_addr_width)
-        em.add_assignment(pq_dep_head_idx,
-            Val(em.slice_var(pq_dep_head.getNameRead(), pq_dep_addr_width - 1, 0)))
-
-        new_ad = LogicVec(em, "new_ad", "w", pq_dep_addr_width)
-        WrapSub(em, new_ad, new_ad_abs, pq_dep_head_idx, n_pq_entries)
-
-        # new_ad is a cyclic forward distance from the dep-array head to the located
-        # boundary. When the dep array is empty there is no real pending-predecessor
-        # boundary: the priority search returns a stale/spurious index whose wrapped
-        # distance must NOT be read as a positive disparity (that is the
-        # zero-extension deadlock - the successor waits forever on a predecessor that
-        # already retired). In that case the disparity is negative ("already sent").
-        # When non-empty the located boundary is a genuine pending predecessor ahead
-        # of the head, so the distance is a non-negative count.
-        new_ad_behind = Logic(em, "new_ad_behind", "w")
-        em.add_assignment(
-            new_ad_behind,
-            Val(pq_dep_head.getNameRead()) == Val(pq_dep_tail.getNameRead()),
-        )
-
         self.dep_full = Logic(em, "dep_full", "w")
-        em.add_assignment(self.dep_full, pq_dep_full | sq_dep_full)
+        em.add_assignment(self.dep_full, pq.full | sq.full)
 
-        return pq_array_at_head, sq_array_at_head, new_ad, pq_dep_addr_width, pq_mark_consumed, new_ad_behind, s_next_head
+        return pq, sq, sq_bb_executed
 
