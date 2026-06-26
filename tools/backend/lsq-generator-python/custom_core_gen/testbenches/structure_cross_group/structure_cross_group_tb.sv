@@ -573,6 +573,110 @@ initial begin
     end
 
     // ------------------------------------------------------------------
+    // TEST 10: Two consecutive successor BB executions (no predecessor BB
+    // between them), where a predecessor BB executes BETWEEN the two — the
+    // second successor's boundary must extend to cover that new
+    // predecessor entry, not inherit the first successor's (now stale)
+    // boundary.
+    //
+    // Reproduces the exact mechanism found in the `lu` integration-test
+    // failure (lsq7's dp_q3_q2). Execution order: P0 S0 P1 S1 P2 P3 S2 P4 S3.
+    // S2 is the first successor BB execution after P2/P3 pushed, so it gets
+    // its own first_sq_bb mark and a fresh boundary search landing on PQ3
+    // (P3, the latest predecessor pushed so far) — correct for S2, since by
+    // execution order S2 only needs to wait through P3.
+    // S3 fires after P4 has ALSO pushed, but with NO successor BB execution
+    // between S2 and S3 to trigger a fresh first_sq_bb mark for P4: S3's SQ
+    // array entry is therefore left unmarked (s_is_first=0), so S3 does NOT
+    // perform its own boundary search (go_to_next_p stays 0) and simply
+    // inherits ad_oh from S2's search: PQ3. But S3's true boundary (by
+    // execution order, since P4 fired between S2 and S3) is PQ4. Once PQ3
+    // retires, S3 is wrongly released even though PQ4 (P4) is still pending.
+    // ------------------------------------------------------------------
+    test_counter = 10;
+    reset();
+    begin
+        localparam logic [ADDR_W-1:0] A0 = 32'hD00D_0000;
+        localparam logic [ADDR_W-1:0] A1 = 32'hD00D_0001;
+        localparam logic [ADDR_W-1:0] A2 = 32'hD00D_0002;
+        localparam logic [ADDR_W-1:0] A3 = 32'hD00D_0003;
+        localparam logic [ADDR_W-1:0] A4 = 32'hD00D_0004;
+        logic [DATA_W-1:0] ld_data0, ld_data1, ld_data2, ld_data3, ld_data4;
+
+        // P0 -> S0 (marks PQ0, binds S0 -> PQ0).
+        bb0_execute();  ld_send_addr(A0);
+        bb1_execute();  st_send_addr(A0);
+
+        // P1 -> S1 (marks PQ1, binds S1 -> PQ1).
+        bb0_execute();  ld_send_addr(A1);
+        bb1_execute();  st_send_addr(A1);
+
+        // P2, P3 both push with NO successor BB execution in between.
+        bb0_execute();  ld_send_addr(A2);
+        bb0_execute();  ld_send_addr(A3);
+
+        // S2: first successor BB execution since P2/P3 pushed -> gets its
+        // own first_sq_bb mark, landing on PQ3 (the latest predecessor
+        // pushed so far). Correct for S2.
+        bb1_execute();  st_send_addr(A2);
+
+        // P4 pushes, then S3 fires immediately after S2 with NO predecessor
+        // BB execution between THEM (S2 and S3 are the consecutive pair) --
+        // but P4 DID execute between S2 and S3, so S3's true boundary must
+        // extend to PQ4. S3 gets no first_sq_bb mark of its own and
+        // inherits S2's PQ3 instead.
+        bb0_execute();  ld_send_addr(A4);
+        bb1_execute();  st_send_addr(A4);
+
+        // All five stores must block: none of the five loads has completed.
+        ticks(10);
+        check(st_mem_addr_valid, 0,
+              "T10: all stores must block — no predecessor load has completed yet");
+
+        // Complete A0, A1, A2, A3's loads in order (unblocking stores 0-3).
+        // A4's load is deliberately left pending: store 4 (which depends on
+        // PQ4 = A4's load by execution order) must NOT be released until
+        // A4's own load completes, even though PQ3 (A3's entry, which the
+        // bug leaves ad_oh stuck on for S3) is now retired.
+        fork
+            ld_mem_respond(A0, 32'h9999_0000);
+            ld_recv_data(ld_data0);
+        join
+        fork
+            ld_mem_respond(A1, 32'h9999_0001);
+            ld_recv_data(ld_data1);
+        join
+        fork
+            ld_mem_respond(A2, 32'h9999_0002);
+            ld_recv_data(ld_data2);
+        join
+        fork
+            ld_mem_respond(A3, 32'h9999_0003);
+            ld_recv_data(ld_data3);
+        join
+        ticks(5);
+        st_mem_respond(A0, 32'hAAAA_0000);
+        ticks(5);
+        st_mem_respond(A1, 32'hBBBB_0000);
+        ticks(5);
+        st_mem_respond(A2, 32'hCCCC_0000);
+        ticks(5);
+        check(st_mem_addr_valid, 0,
+              "T10: 5th store (S3, depends on PQ4=A4) must STILL block — A4's load is still pending");
+
+        // Now complete A4's load — only now may the fifth store proceed.
+        fork
+            ld_mem_respond(A4, 32'h9999_0004);
+            ld_recv_data(ld_data4);
+        join
+        ticks(5);
+        st_mem_respond(A4, 32'hDDDD_0000);
+        ticks(5);
+        check(ld_empty, 1, "T10: load queue drained");
+        check(st_empty, 1, "T10: store queue drained");
+    end
+
+    // ------------------------------------------------------------------
     // Summary
     // ------------------------------------------------------------------
     $display("\n%0d test(s) failed.", fail_count);

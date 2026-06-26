@@ -660,6 +660,9 @@ struct IndexAnalysis {
   // was actually imprecise, as this contains also RAW dependencies.
   std::set<InstPairType> dependentReadAndWritePairs;
   std::set<InstPairType> dependentWriteAndWritePairs;
+  // WAR pairs, stored as (loadInst, storeInst): the load must be guaranteed to
+  // execute before the store in the same iteration of their common loop.
+  std::set<InstPairType> dependentReadAndWritePairsWAR;
   std::set<BasicBlock *> bbList;
   std::map<BasicBlock *, int> bbToScopMap;
   std::map<Instruction *, Value *> instToBase;
@@ -852,10 +855,28 @@ void MemDepAnalysisPass::processScop(Scop &scop,
     // The convention used in ScopMeta class is that the first element in an
     // instPair is a store instruction. Thus, checking the type of the second
     // instruction tells us whther it is a RAW/WAW dependency
-    if (pair.second->mayWriteToMemory())
+    if (pair.second->mayWriteToMemory()) {
       indexAnalysis.dependentWriteAndWritePairs.insert(pair);
-    else
-      indexAnalysis.dependentReadAndWritePairs.insert(pair);
+      continue;
+    }
+    indexAnalysis.dependentReadAndWritePairs.insert(pair);
+
+    // computeIntersections() only ever proves that the *some* iteration of
+    // the store and *some* iteration of the load may touch the same address;
+    // it never emits the reverse (load-before-store, i.e. WAR) pair, since by
+    // convention the store is always first. When both accesses are in the
+    // same basic block (no loop separates them, so there is exactly one
+    // iteration relationship to consider) and the load is textually before
+    // the store, the load must observe the old value before the store
+    // overwrites it: record this as a same-iteration (distance 0) WAR pair so
+    // it doesn't get silently dropped (see HandshakeDeactivateMemDependencies,
+    // which expects an explicit WAR entry to possibly deactivate, not the
+    // absence of one).
+    Instruction *storeInst = pair.first;
+    Instruction *loadInst = pair.second;
+    if (storeInst->getParent() == loadInst->getParent() &&
+        loadInst->comesBefore(storeInst))
+      indexAnalysis.dependentReadAndWritePairsWAR.insert({loadInst, storeInst});
   }
 
   scopMeta.push_back(meta);
@@ -893,6 +914,10 @@ MemDepAnalysisPass::getDependencyPairs(Function &llvmFunction,
       if (sameScopHelper.sameScop(loadInst, storeInst)) {
         if (indexAnalysis.dependentReadAndWritePairs.count(rawPair))
           depPairList.push_back(rawPair);
+
+        InstPairType warPair = std::make_pair(loadInst, storeInst);
+        if (indexAnalysis.dependentReadAndWritePairsWAR.count(warPair))
+          depPairList.push_back(warPair);
 
         LLVM_DEBUG({
           if (!indexAnalysis.dependentReadAndWritePairs.count(rawPair)) {
