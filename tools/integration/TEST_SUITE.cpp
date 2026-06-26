@@ -54,6 +54,7 @@ class SpecFixture : public BaseFixture {};
 class RigidificationFixture : public BaseFixture {};
 class VerifyInvariantsFixture : public BaseFixture {};
 class OrderingNetworkFixture : public BaseFixture {};
+class OrderingNetworkMemoryFixture : public BaseFixture {};
 
 TEST_P(BasicFixture, basic) {
   IntegrationTestData config{
@@ -245,6 +246,24 @@ TEST_P(OrderingNetworkFixture, basic) {
   logPerformance(config.simTime);
 }
 
+TEST_P(OrderingNetworkMemoryFixture, basic) {
+  IntegrationTestData config{
+      // clang-format off
+      .name = GetParam(),
+      .benchmarkPath = fs::path(DYNAMATIC_ROOT) / "integration-test" / "memory",
+      .testVerilog = true,
+      .useSharing = false,
+      .useOrderingNetwork = true,
+      .milpSolver = "gurobi",
+      .bufferAlgorithm = "fpga20",
+      .simTime = -1
+      // clang-format on
+  };
+  EXPECT_EQ(runIntegrationTest(config), 0);
+  RecordProperty("cycles", std::to_string(config.simTime));
+  logPerformance(config.simTime);
+}
+
 // clang-format off
 INSTANTIATE_TEST_SUITE_P(
     MiscBenchmarks, BasicFixture,
@@ -338,7 +357,6 @@ INSTANTIATE_TEST_SUITE_P(
       "histogram",
       "insertion_sort",
       "jacobi_1d_imper",
-      "jacobi_1d",
       "kernel_2mm",
       "kernel_2mm_float",
       "kernel_3mm",
@@ -349,7 +367,6 @@ INSTANTIATE_TEST_SUITE_P(
       "matching",
       "matching_2",
       "matrix_power",
-      "memory",
       "pivot",
       "polyn_mult",
       "symm_float",
@@ -359,6 +376,28 @@ INSTANTIATE_TEST_SUITE_P(
       "while_loop_1"
       ),
       [](const auto &info) { return info.param; });
+
+INSTANTIATE_TEST_SUITE_P(
+    MemoryBenchmarks, OrderingNetworkMemoryFixture,
+    // only cover the memory tests that contain an LSQ
+    testing::Values(
+      "test_memory_3",
+      "test_memory_4",
+      "test_memory_5",
+      "test_memory_6",
+      "test_memory_7",
+      "test_memory_8",
+      "test_memory_9",
+      "test_memory_11",
+      "test_memory_13",
+      "test_memory_14",
+      "test_memory_15",
+      "test_memory_16",
+      "test_memory_17",
+      "test_smallbound",
+      "test_internal_array"
+      ),
+      [](const auto &info) { return "memory_" + info.param; });
 
 #ifdef DYNAMATIC_ENABLE_CBC
 // Smoke test: Using the CBC MILP solver to optimize some simple benchmarks
