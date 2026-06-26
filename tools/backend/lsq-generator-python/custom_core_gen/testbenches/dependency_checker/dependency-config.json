@@ -30,5 +30,6 @@
         "master": false
     },
     "TailOffsetWidth": 2,
-    "AccessDisparityWidth": 2
+    "AccessDisparityWidth": 2,
+    "UseDependencyMatrix": false
 }

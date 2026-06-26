@@ -75,7 +75,8 @@ class DependencyChecker(Generator):
         conflict = Logic(em, "conflict", "w")
 
         n_pq_entries = self.configs.pq.num_entries
-        check_mask = LogicVec(em, "check_mask", "w", n_pq_entries)
+        use_dep_matrix = crosses_bb and self.configs.use_dep_matrix
+        check_mask = None if use_dep_matrix else LogicVec(em, "check_mask", "w", n_pq_entries)
 
         if not crosses_bb:
             access_disparity = self._ad_same_group(em, ad_width, sq_access_en_i, pq_done_en_i)
@@ -89,6 +90,16 @@ class DependencyChecker(Generator):
                     Bit(1).when(Val(i, size=ad_width) < access_disparity).else_(Bit(0)),
                 )
             CyclicRightShift(em, check_mask, ones, pq_done_i)
+        elif use_dep_matrix:
+            # Cross-BB, dependency-matrix variant: a persistent n_sq x n_pq bit
+            # matrix tracks, per physical SQ entry, which physical PQ entries it
+            # must check. See `_check_mask_matrix_cross_group`. This variant
+            # tracks dependencies entirely through the matrix bits (no separate
+            # access-disparity counter), so the allocation/sent gates further
+            # below are skipped entirely for it.
+            check_mask = self._check_mask_matrix_cross_group(
+                em, pq_done_i, pq_done_en_i, sq_access_en_i
+            )
         else:
             # Cross-BB: a small two-state machine drives the disparity (see
             # `_disparity_cross`). It returns the integer count (for the
@@ -117,6 +128,15 @@ class DependencyChecker(Generator):
             )
 
         Reduce(em, conflict, conflicts, BinOp.OR)
+
+        if use_dep_matrix:
+            # The matrix already captures, exactly, which pending PQ entries
+            # this SQ entry must wait on - no separate allocation/sent gating
+            # is needed (those gates exist to approximate the same thing from
+            # an integer disparity count).
+            em.add_assignment(allow_sq_access_o, ~conflict)
+            self._write_to_file(em, path_rtl, out_file)
+            return
 
         # Bring both operands to cmp_width bits so the equality check is type-safe.
         # pq_length_i is non-negative so it gets zero-extended; access_disparity is
@@ -415,6 +435,151 @@ class DependencyChecker(Generator):
 
         # POSITIVE -> the window [head .. ad_oh] inclusive (count); NEGATIVE -> 0.
         return ad_oh, pq.head_oh, is_positive, access_disparity
+
+    # ===----------------------------------------------------------------------===
+    # Cross-BB dependency matrix (alternative to the access-disparity state machine)
+    # ===----------------------------------------------------------------------===
+
+    def _check_mask_matrix_cross_group(
+        self, em: Emitter, pq_done_i, pq_done_en_i, sq_access_en_i
+    ):
+        """Cross-BB disparity, dependency-matrix variant.
+
+        A persistent `dep_matrix[s][p]` bit matrix (n_sq rows x n_pq columns)
+        records, for every physical SQ entry `s`, which physical PQ entries `p`
+        it must still check before it is allowed to access. It is maintained
+        with three independent rules:
+
+          - PQ tail moves (a new PQ entry is allocated by a predecessor BB
+            execution): nothing depends on a brand-new PQ entry yet, so its
+            column is cleared across every SQ row.
+          - SQ tail moves (a new SQ entry is allocated by a successor BB
+            execution): that new entry inherits a dependency on every PQ entry
+            currently occupying the PQ queue (tracked by `pq_occupied`), so its
+            row is set to the current occupancy snapshot.
+          - PQ head moves (`pq_done_en_i` retires a PQ entry): that entry's
+            dependency is now satisfied, so its column is cleared across every
+            SQ row - without this, a row that depended on a since-retired PQ
+            slot would stay stuck (falsely conflicting via `pq_addr_i` re-
+            matching the same address) until that physical slot happened to be
+            reallocated to a new, unrelated entry.
+
+        The SQ head's row, read out directly via `MuxLookUp` on the
+        self-tracked `sq_head_ptr` (NOT the `sq_head` port, which holds the
+        memory address at the head slot rather than its physical index), IS
+        the check_mask."""
+        n_pq = self.configs.pq.num_entries
+        n_sq = self.configs.sq.num_entries
+        pq_addr_width = math.ceil(math.log2(n_pq))
+        sq_addr_width = math.ceil(math.log2(n_sq))
+
+        # --- PQ queue occupancy: which physical PQ slots are currently valid ---
+        # Set on allocation (tail push), cleared on retirement (pq_done_en_i at
+        # that slot) - mirrors the LSQ's own ldq_alloc/stq_alloc bookkeeping.
+        # `pq_full` (tail slot already occupied) is read from the *registered*
+        # occupancy array, so it is available combinationally before
+        # `pq_bb_executed` - which it gates - is computed.
+        pq_tail = LogicVec(em, "mat_pq_tail", "r", pq_addr_width)
+        pq_tail_next = LogicVec(em, "mat_pq_tail_next", "w", pq_addr_width)
+        pq_tail_oh = LogicVec(em, "mat_pq_tail_oh", "w", n_pq)
+        BitsToOH(em, pq_tail_oh, pq_tail)
+
+        pq_occupied = LogicArray(em, "mat_pq_occupied", "r", n_pq)
+        pq_full = Logic(em, "mat_pq_full", "w")
+        MuxLookUp(em, pq_full, pq_occupied, pq_tail)
+
+        pq_bb_executed = self._make_bb_ports(em, "pq", ~pq_full)
+
+        pq_done_oh = LogicVec(em, "mat_pq_done_oh", "w", n_pq)
+        BitsToOH(em, pq_done_oh, pq_done_i)
+
+        for i in range(n_pq):
+            em.add_assignment(
+                pq_occupied[i],
+                Bit(1).when(Val(pq_tail_oh, i) & pq_bb_executed)
+                .else_(Bit(0).when(Val(pq_done_oh, i) & pq_done_en_i).else_(pq_occupied[i])),
+            )
+        pq_occupied.regInit()
+
+        WrapAddConst(em, pq_tail_next, pq_tail, 1, n_pq)
+        em.add_assignment(pq_tail, pq_tail_next)
+        pq_tail.regInit(init=0, enable=pq_bb_executed)
+
+        # --- SQ queue occupancy: same scheme, mirrored for the SQ side ---
+        # `sq_head` (port) is the MEMORY ADDRESS stored at the SQ's physical
+        # head slot, not its slot index - it cannot be used to index
+        # dep_matrix/sq_occupied. The dependency checker has no exposed SQ
+        # head-index port either, so a head-index pointer is tracked here
+        # directly, advanced by `sq_access_en_i` as a send retires the head
+        # entry (mirrors `sq_tail` tracking allocation via `sq_bb_executed`).
+        sq_tail = LogicVec(em, "mat_sq_tail", "r", sq_addr_width)
+        sq_tail_next = LogicVec(em, "mat_sq_tail_next", "w", sq_addr_width)
+        sq_tail_oh = LogicVec(em, "mat_sq_tail_oh", "w", n_sq)
+        BitsToOH(em, sq_tail_oh, sq_tail)
+
+        sq_occupied = LogicArray(em, "mat_sq_occupied", "r", n_sq)
+        sq_full = Logic(em, "mat_sq_full", "w")
+        MuxLookUp(em, sq_full, sq_occupied, sq_tail)
+
+        sq_bb_executed = self._make_bb_ports(em, "sq", ~sq_full)
+
+        sq_head_ptr = LogicVec(em, "mat_sq_head_ptr", "r", sq_addr_width)
+        sq_head_ptr_next = LogicVec(em, "mat_sq_head_ptr_next", "w", sq_addr_width)
+        sq_head_oh = LogicVec(em, "mat_sq_head_oh", "w", n_sq)
+        BitsToOH(em, sq_head_oh, sq_head_ptr)
+
+        for i in range(n_sq):
+            em.add_assignment(
+                sq_occupied[i],
+                Bit(1).when(Val(sq_tail_oh, i) & sq_bb_executed)
+                .else_(Bit(0).when(Val(sq_head_oh, i) & sq_access_en_i).else_(sq_occupied[i])),
+            )
+        sq_occupied.regInit()
+
+        WrapAddConst(em, sq_tail_next, sq_tail, 1, n_sq)
+        em.add_assignment(sq_tail, sq_tail_next)
+        sq_tail.regInit(init=0, enable=sq_bb_executed)
+
+        WrapAddConst(em, sq_head_ptr_next, sq_head_ptr, 1, n_sq)
+        em.add_assignment(sq_head_ptr, sq_head_ptr_next)
+        sq_head_ptr.regInit(init=0, enable=sq_access_en_i)
+
+        # --- The dependency matrix itself ---
+        # NOTE: mirrors the rest of this file's assumption that PQ and SQ BBs
+        # never execute on the same cycle (see the same TODO in
+        # `_build_dep_arrays`) - the SQ-tail-push snapshot reads the
+        # registered (pre-edge) `pq_occupied`, so a same-cycle PQ allocation
+        # would not yet be reflected in it.
+        dep_matrix = LogicVecArray(em, "dep_matrix", "r", n_sq, n_pq)
+        for s in range(n_sq):
+            for p in range(n_pq):
+                em.add_assignment(
+                    (dep_matrix, s, p),
+                    # SQ tail push: the new SQ row inherits the current PQ
+                    # occupancy snapshot.
+                    Val(pq_occupied, p).when(Val(sq_tail_oh, s) & sq_bb_executed)
+                    .else_(
+                        # PQ tail push: the new PQ column starts undependent on
+                        # in every row (nothing has been stamped against it
+                        # yet).
+                        Bit(0).when(Val(pq_tail_oh, p) & pq_bb_executed)
+                        .else_(
+                            # PQ head retires this slot: the dependency it
+                            # represented is now satisfied, so every row
+                            # waiting on it must be cleared too - otherwise a
+                            # row stays stuck depending on a PQ slot whose
+                            # entry has long since left the queue, until that
+                            # slot happens to be reallocated.
+                            Bit(0).when(Val(pq_done_oh, p) & pq_done_en_i)
+                            .else_(Val(dep_matrix, s, p))
+                        )
+                    ),
+                )
+        dep_matrix.regInit()
+
+        check_mask = LogicVec(em, "check_mask", "w", n_pq)
+        MuxLookUp(em, check_mask, dep_matrix, sq_head_ptr)
+        return check_mask
 
     def _make_bb_ports(self, em: Emitter, prefix: str, ready):
         valid_i = self._add_port(Logic(em, f"{prefix}_bb_valid", "i"))

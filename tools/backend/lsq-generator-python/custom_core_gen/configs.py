@@ -57,6 +57,9 @@ class DependencyCheckerConfig:
         False  # Whether this dependency checker checks for dependencies in reverse order
     )
     access_disparity_width: int = 4
+    use_dep_matrix: bool = (
+        False  # Cross-BB only: use a 2D pq x sq dependency matrix instead of the access-disparity state machine
+    )
 
     def __init__(
         self, config: dict, pq: "QueueConfig" = None, sq: "QueueConfig" = None, pq_bb: int = None, sq_bb: int = None
@@ -68,6 +71,7 @@ class DependencyCheckerConfig:
         self.succ_can_execute_once = config.get("succCanExecuteOnce")
         self.access_disparity_width = config.get("AccessDisparityWidth")
         self.dep_entry_ratio = config.get("depEntryRatio", 1)
+        self.use_dep_matrix = config.get("UseDependencyMatrix", False)
 
     @staticmethod
     def from_parts(
@@ -79,6 +83,7 @@ class DependencyCheckerConfig:
         obj.access_disparity_width = dc_config.get("AccessDisparityWidth")
         obj.succ_can_execute_once = dc_config.get("succCanExecuteOnce")
         obj.dep_entry_ratio = dc_config.get("depEntryRatio", 1)
+        obj.use_dep_matrix = dc_config.get("UseDependencyMatrix", False)
         return obj
 
 
