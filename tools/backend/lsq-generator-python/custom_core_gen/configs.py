@@ -71,7 +71,7 @@ class DependencyCheckerConfig:
         self.succ_can_execute_once = config.get("succCanExecuteOnce")
         self.access_disparity_width = config.get("AccessDisparityWidth")
         self.dep_entry_ratio = config.get("depEntryRatio", 1)
-        self.use_dep_matrix = config.get("UseDependencyMatrix", False)
+        self.use_dep_matrix = config.get("UseDependencyMatrix", True)
 
     @staticmethod
     def from_parts(

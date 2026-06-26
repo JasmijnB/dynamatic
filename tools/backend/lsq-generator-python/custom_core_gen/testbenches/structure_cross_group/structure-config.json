@@ -1,11 +1,23 @@
 {
   "name": "structure_cross_group",
-  "edgeSrc": [0],
-  "edgeDst": [1],
-  "edgeDp": [0],
+  "edgeSrc": [
+    0
+  ],
+  "edgeDst": [
+    1
+  ],
+  "edgeDp": [
+    0
+  ],
   "stResp": 0,
-  "portBBIds": [0, 1],
-  "portsToQueue": [0, 1],
+  "portBBIds": [
+    0,
+    1
+  ],
+  "portsToQueue": [
+    0,
+    1
+  ],
   "queues": [
     {
       "QueueType": "load",
@@ -32,7 +44,8 @@
     {
       "AccessDisparityWidth": 8,
       "succCanExecuteOnce": false,
-      "depEntryRatio": 1
+      "depEntryRatio": 1,
+      "UseDependencyMatrix": false
     }
   ]
 }
