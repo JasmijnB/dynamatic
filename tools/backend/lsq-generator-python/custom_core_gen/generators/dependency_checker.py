@@ -40,7 +40,7 @@ class DependencyChecker(Generator):
         crosses_bb = self.configs.pq_bb != self.configs.sq_bb
 
         pq_ptr_width = self.configs.pq.q_addr_width + 1
-
+        
         ######  Queue Inputs ######
         # ===[ predecessor ]===
         pq_addr_i = self._add_port(
@@ -526,12 +526,11 @@ class DependencyChecker(Generator):
         head_low = Val(em.slice_var(head.getNameRead(), addr_width - 1, 0))
         em.add_assignment(full, (tail_msb != head_msb) & (tail_low == head_low))
 
-        array_at_head = None
-        if with_array_at_head:
-            head_idx = LogicVec(em, f"{prefix}_dep_head_idx", "w", addr_width)
-            em.add_assignment(head_idx, Val(em.slice_var(head.getNameRead(), addr_width - 1, 0)))
-            array_at_head = Logic(em, f"{prefix}_array_at_head", "w")
-            MuxLookUp(em, array_at_head, array, head_idx)
+        head_idx = LogicVec(em, f"{prefix}_dep_head_idx", "w", addr_width)
+
+        em.add_assignment(head_idx, Val(em.slice_var(head.getNameRead(), addr_width - 1, 0)))
+        array_at_head = Logic(em, f"{prefix}_array_at_head", "w")
+        MuxLookUp(em, array_at_head, array, head_idx)
 
         # One-hot of the head index, used by the cross-BB state machine to anchor
         # the AD one-hot and to detect when a pop consumes the AD boundary.
