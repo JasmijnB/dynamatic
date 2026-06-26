@@ -319,8 +319,28 @@ class DependencyChecker(Generator):
         # cycle, stranding ad_oh behind the head forever. ad_oh must never lag
         # the head - it has to move the instant the head does.
         ad_oh = LogicVec(em, "ad_oh", "r", n_pq)
+
+        # CyclicPriorityMasking's search is INCLUSIVE of its pivot bit: if the
+        # pivot position is itself marked in pq_array, the search immediately
+        # returns the pivot, never advancing further. That is correct on entry
+        # into POSITIVE (go_positive: the head itself may legitimately be the
+        # boundary), but wrong on the re-search "jump" (a later successor
+        # needs the NEXT marked entry after the one ad_oh already points at,
+        # not ad_oh itself again - ad_oh's own slot is always still marked at
+        # this point, since pq.array entries are only ever overwritten much
+        # later when the tail wraps back around, not cleared on consumption).
+        # So the jump case must pivot from one slot past ad_oh, or a later
+        # successor that needs a later boundary gets stuck re-finding the
+        # earlier one forever.
+        ad_oh_idx = LogicVec(em, "ad_oh_idx", "w", pq_addr_width)
+        OHToBits(em, ad_oh_idx, ad_oh)
+        ad_oh_idx_plus1 = LogicVec(em, "ad_oh_idx_plus1", "w", pq_addr_width)
+        WrapAddConst(em, ad_oh_idx_plus1, ad_oh_idx, 1, n_pq)
+        ad_oh_plus1 = LogicVec(em, "ad_oh_plus1", "w", n_pq)
+        BitsToOH(em, ad_oh_plus1, ad_oh_idx_plus1)
+
         search_pivot = LogicVec(em, "ad_search_pivot", "w", n_pq)
-        em.add_assignment(search_pivot, pq.head_oh_next.when(go_positive).else_(ad_oh))
+        em.add_assignment(search_pivot, pq.head_oh_next.when(go_positive).else_(ad_oh_plus1))
         ad_oh_next = LogicVec(em, "ad_oh_next", "w", n_pq)
         CyclicPriorityMasking(em, ad_oh_next, self.pq_array_next, search_pivot)
 
@@ -381,10 +401,8 @@ class DependencyChecker(Generator):
         # Unsigned: the cross-BB disparity is never negative (NEGATIVE state reads
         # as 0, not a negative count), so it only needs pq_addr_width + 1 bits
         # (max value n_pq, when the boundary sits one slot behind the head).
-        ad_idx = LogicVec(em, "ad_idx", "w", pq_addr_width)
-        OHToBits(em, ad_idx, ad_oh)
         head_to_ad = LogicVec(em, "ad_head_to_ad", "w", pq_addr_width)
-        WrapSub(em, head_to_ad, ad_idx, pq.head_idx, n_pq)
+        WrapSub(em, head_to_ad, ad_oh_idx, pq.head_idx, n_pq)
         head_to_ad_wide = LogicVec(em, "ad_head_to_ad_wide", "w", pq_addr_width + 1)
         em.add_assignment(head_to_ad_wide, Bit(0).concat(head_to_ad))
         access_disparity_count = LogicVec(em, "ad_disparity_count", "w", pq_addr_width + 1)
