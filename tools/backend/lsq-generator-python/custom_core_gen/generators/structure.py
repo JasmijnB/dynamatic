@@ -30,6 +30,21 @@ DC_TO_SQ_MAP = {
 # DC ports that are handled by structure.py's BB routing rather than the queue maps.
 CROSS_BB_DC_PORTS = {"pq_bb_valid_i", "pq_bb_ready_o", "sq_bb_valid_i", "sq_bb_ready_o"}
 
+# Insert the transparent BB-handshake elastic register (see `_bb_skid_buffer`)
+# only when a BB fans out to at least this many dependency-checker ports. The
+# long combinational chain the skid cuts is the per-checker "all OTHER checkers
+# ready" AND-tree, which only exists when several checkers share a BB; below the
+# threshold the path is short and the register would be pure overhead. The
+# fanout of a BB is known at generation time (it is len(pairs) in
+# `_route_bb_ports`), unlike post-route path delay, so this is the only kind of
+# threshold the generator can apply on its own.
+#
+# kernel_3mm's critical path runs through a fanout-3 BB (lsq5 / dp_q2_q3), so 3
+# is the tightest cutoff that still covers it; lower it to 2 to also buffer the
+# shorter two-checker AND-trees. Set to 0 to always skid, or a huge value to
+# never skid.
+BB_SKID_FANOUT_THRESHOLD = 3
+
 
 def get_global_queue_ports(queue_def):
     dc_ports = set(DC_TO_SQ_MAP.values()) | set(DC_TO_PQ_MAP.values())
@@ -331,16 +346,84 @@ class Structure(Generator):
             bb_ready = Logic(em, f"bb_ready_{bb_id}", "o")
             all_readies = [dc_ready_wires[(id(dp), pfx)] for dp, pfx in pairs]
 
-            em.add_assignment(bb_ready, reduce(lambda x, y: x & y, all_readies))
+            # Insert a transparent one-slot elastic register between the external
+            # BB handshake and the per-checker atomic fan-out, but ONLY when the
+            # BB fans out widely enough for the cross-checker AND-tree to be on a
+            # long path (see BB_SKID_FANOUT_THRESHOLD). The skid cuts the chain
+            # that runs from `bb_valid_{bb_id}` through the "all other checkers
+            # ready" AND-tree into each checker's dep-array push / AD search (the
+            # upstream portion of the kernel_3mm critical path). It preserves the
+            # ready/valid contract exactly (BB still executes atomically, exactly
+            # once) and only adds one cycle of latency, which every checker on
+            # this BB observes together, so dependency ordering is unchanged.
+            # Below the threshold the path is short, so wire the handshake
+            # directly (the original combinational AND of all checker readies).
+            if len(pairs) >= BB_SKID_FANOUT_THRESHOLD:
+                bb_valid_reg = self._bb_skid_buffer(
+                    em, bb_id, bb_valid, bb_ready, all_readies
+                )
+            else:
+                em.add_assignment(bb_ready, reduce(lambda x, y: x & y, all_readies))
+                bb_valid_reg = bb_valid
 
             for i, (dp_checker, prefix) in enumerate(pairs):
                 others = [all_readies[j] for j in range(len(pairs)) if j != i]
                 if others:
                     masked = Logic(em, f"bb_{bb_id}_{prefix}_{dp_checker.pred.num}_{dp_checker.succ.num}_valid", "w")
-                    factor = bb_valid
+                    factor = bb_valid_reg
                     for w in others:
                         factor = factor & w
                     em.add_assignment(masked, factor)
                     dp_checker.port_vars[f"{prefix}_bb_valid_i"] = masked
                 else:
-                    dp_checker.port_vars[f"{prefix}_bb_valid_i"] = bb_valid
+                    dp_checker.port_vars[f"{prefix}_bb_valid_i"] = bb_valid_reg
+
+    def _bb_skid_buffer(self, em: Emitter, bb_id, bb_valid, bb_ready, all_readies):
+        """Transparent one-slot elastic register on a BB handshake.
+
+        Buffers the external BB request for one cycle before presenting it to the
+        checkers, so the long external-valid -> cross-checker-ready AND-tree ->
+        dep-array-push path is broken by a register without changing the
+        ready/valid semantics: full throughput, exactly-once atomic execution,
+        one extra cycle of latency. The dep arrays never overflow (the buffered
+        request is only pushed when every checker has room); the register is one
+        extra in-flight slot, so the BB arbiter sees back-pressure one execution
+        later than the raw dep-array depth.
+
+        Returns the registered `bb_valid` that should feed the per-checker
+        atomic fan-out (each checker's valid is still gated by the *other*
+        checkers' readies downstream of this register).
+        """
+        # Combined readiness of all checkers for this BB (their dep arrays have
+        # room for the push).
+        all_ready = Logic(em, f"bb_{bb_id}_all_ready", "w")
+        em.add_assignment(all_ready, reduce(lambda x, y: x & y, all_readies))
+
+        # `full` holds a buffered, not-yet-pushed request (single slot).
+        full = Logic(em, f"bb_{bb_id}_skid_full", "r")
+
+        # The buffered request is presented to the checkers; it is pushed
+        # ("accepted") when every checker has room.
+        valid_int = Logic(em, f"bb_{bb_id}_skid_valid", "w")
+        em.add_assignment(valid_int, full)
+        accept = Logic(em, f"bb_{bb_id}_skid_accept", "w")
+        em.add_assignment(accept, full & all_ready)
+
+        # External accept (single slot): only when the slot is empty or draining
+        # this cycle. The dep arrays themselves never overflow (a push only
+        # happens on `accept`, which requires room); the register is one extra
+        # in-flight slot, so back-pressure to the BB arbiter is observed one
+        # execution later than the raw dep-array depth.
+        room_for_new = Logic(em, f"bb_{bb_id}_skid_room", "w")
+        em.add_assignment(room_for_new, ~full | accept)
+        em.add_assignment(bb_ready, room_for_new)
+
+        external_xfer = Logic(em, f"bb_{bb_id}_skid_xfer", "w")
+        em.add_assignment(external_xfer, bb_valid & room_for_new)
+
+        # full' = there is a buffered request next cycle: a new one arrives, or
+        # the current one is held because it was not pushed.
+        em.add_assignment(full, external_xfer | (full & ~accept))
+        full.regInit(init=0)
+
+        return valid_int
