@@ -43,7 +43,7 @@ CROSS_BB_DC_PORTS = {"pq_bb_valid_i", "pq_bb_ready_o", "sq_bb_valid_i", "sq_bb_r
 # is the tightest cutoff that still covers it; lower it to 2 to also buffer the
 # shorter two-checker AND-trees. Set to 0 to always skid, or a huge value to
 # never skid.
-BB_SKID_FANOUT_THRESHOLD = 3
+BB_SKID_FANOUT_THRESHOLD = 1
 
 
 def get_global_queue_ports(queue_def):
