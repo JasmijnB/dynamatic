@@ -361,10 +361,11 @@ class DependencyChecker(Generator):
         # earlier one forever.
         ad_oh_idx = LogicVec(em, "ad_oh_idx", "w", pq_addr_width)
         OHToBits(em, ad_oh_idx, ad_oh)
-        ad_oh_idx_plus1 = LogicVec(em, "ad_oh_idx_plus1", "w", pq_addr_width)
-        WrapAddConst(em, ad_oh_idx_plus1, ad_oh_idx, 1, n_pq)
+        # Rotate the one-hot vector itself by one slot rather than round-tripping
+        # through an index (idx -> +1 -> OH)
         ad_oh_plus1 = LogicVec(em, "ad_oh_plus1", "w", n_pq)
-        BitsToOH(em, ad_oh_plus1, ad_oh_idx_plus1)
+        for i in range(n_pq):
+            em.add_assignment((ad_oh_plus1, i), Val(ad_oh, (i - 1) % n_pq))
 
         search_pivot = LogicVec(em, "ad_search_pivot", "w", n_pq)
         em.add_assignment(search_pivot, pq.head_oh_next.when(go_positive).else_(ad_oh_plus1))
