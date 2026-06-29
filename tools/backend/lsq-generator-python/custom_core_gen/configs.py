@@ -68,6 +68,11 @@ class DependencyCheckerConfig:
         self.succ_can_execute_once = config.get("succCanExecuteOnce")
         self.access_disparity_width = config.get("AccessDisparityWidth")
         self.dep_entry_ratio = config.get("depEntryRatio", 1)
+        # Opt-in: compute the cross-BB ad_oh search from the *registered* dep
+        # array instead of its same-cycle next-state view, taking one cycle of
+        # latency (covered by access-grant pushback) to keep the search off the
+        # critical path. Default off -> unchanged RTL.
+        self.precompute_ad_oh = config.get("precomputeAdOh", True)
 
     @staticmethod
     def from_parts(
@@ -79,6 +84,7 @@ class DependencyCheckerConfig:
         obj.access_disparity_width = dc_config.get("AccessDisparityWidth")
         obj.succ_can_execute_once = dc_config.get("succCanExecuteOnce")
         obj.dep_entry_ratio = dc_config.get("depEntryRatio", 1)
+        obj.precompute_ad_oh = dc_config.get("precomputeAdOh", True)
         return obj
 
 

@@ -370,7 +370,14 @@ class DependencyChecker(Generator):
         search_pivot = LogicVec(em, "ad_search_pivot", "w", n_pq)
         em.add_assignment(search_pivot, pq.head_oh_next.when(go_positive).else_(ad_oh_plus1))
         ad_oh_next = LogicVec(em, "ad_oh_next", "w", n_pq)
-        CyclicPriorityMasking(em, ad_oh_next, self.pq_array_next, search_pivot)
+        # TIMING PROBE (precompute_ad_oh, option B): search the *registered* dep
+        # array instead of the same-cycle next-state view. This pulls the
+        # sq_bb_executed -> mark -> din combinational chain off the search path so
+        # we can measure the LSQ-side Fmax gain. NOTE: functionally incomplete -
+        # it drops same-cycle mark visibility and has no grant-pushback yet, so it
+        # is for timing measurement only, not correctness.
+        search_array = pq.array if self.configs.precompute_ad_oh else self.pq_array_next
+        CyclicPriorityMasking(em, ad_oh_next, search_array, search_pivot)
 
         em.add_assignment(ad_oh, pq.head_oh_next
                           .when(~go_positive & ~is_positive).else_(
