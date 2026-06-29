@@ -79,14 +79,15 @@ class DependencyChecker(Generator):
 
         if not crosses_bb:
             access_disparity = self._ad_same_group(em, ad_width, sq_access_en_i, pq_done_en_i)
-            # Same-BB: AD is an integer count of pending predecessor accesses to
-            # check. Build a head-relative run of 1s (bit i set iff i < AD) and
-            # rotate it into the physical-entry frame by the done pointer.
+            # Same-BB: AD is the index of the last pending predecessor access to
+            # check (i.e. count - 1; -1 means nothing to check). Build a
+            # head-relative run of 1s (bit i set iff i <= AD) and rotate it into
+            # the physical-entry frame by the done pointer.
             ones = LogicVec(em, "ones", "w", n_pq_entries)
             for i in range(n_pq_entries):
                 em.add_assignment(
                     (ones, i),
-                    Bit(1).when(Val(i, size=ad_width) < access_disparity).else_(Bit(0)),
+                    Bit(1).when(Val(i, size=ad_width) <= access_disparity).else_(Bit(0)),
                 )
             CyclicRightShift(em, check_mask, ones, pq_done_i)
         else:
@@ -150,15 +151,37 @@ class DependencyChecker(Generator):
         else:
             ad_as_cmp = access_disparity
 
+        # access_disparity is count - 1 (the index of the last pending entry to
+        # check) in both the same-BB and cross-BB encodings, so "allocated"
+        # needs pq_length_i > access_disparity (i.e. pq_length_i >= access_disparity + 1).
         corresponding_entry_sent = Logic(em, "corresponding_entry_sent", "w")
         corresponding_entry_allocated = Logic(em, "corresponding_entry_allocated", "w")
-        em.add_assignment(
-            corresponding_entry_allocated, (pq_length_as_cmp >= ad_as_cmp)
-        )
-        em.add_assignment(
-            corresponding_entry_sent,
-            access_disparity <= Val(0, size=ad_width_actual),
-        )
+        if ad_is_signed:
+            # Same-BB: "nothing to check" is the only state representable below
+            # index 0 (access_disparity < 0), and pq_length_i (>= 0) is always >
+            # a negative access_disparity, so the plain comparison already
+            # covers that case without an extra gate.
+            em.add_assignment(
+                corresponding_entry_allocated, (pq_length_as_cmp > ad_as_cmp)
+            )
+            em.add_assignment(
+                corresponding_entry_sent,
+                access_disparity < Val(0, size=ad_width_actual),
+            )
+        else:
+            # Cross-BB: "nothing to check" is the NEGATIVE state, signalled by
+            # is_positive rather than by the (unsigned, don't-care-when-negative)
+            # access_disparity value - access_disparity == 0 in POSITIVE means
+            # one pending entry (index 0), not zero, so it can't double as the
+            # sentinel the way the same-BB signed encoding does. The
+            # pq_length_i > access_disparity comparison is only meaningful in
+            # POSITIVE; in NEGATIVE there's nothing pending to allocate against,
+            # so the gate must not block access on the don't-care AD value.
+            em.add_assignment(
+                corresponding_entry_allocated,
+                ~is_positive | (pq_length_as_cmp > ad_as_cmp),
+            )
+            em.add_assignment(corresponding_entry_sent, ~is_positive)
 
         em.add_comment(
             "Allow access if:"
@@ -178,12 +201,13 @@ class DependencyChecker(Generator):
         if ad_is_signed:
             # ad is a signed number, so the max value it can take is 2^(n-1) - 1
             max_ad_val = (1 << (ad_width_actual - 1)) - 1
-            # corresponding_entry_allocated requires pq_length_i >= access_disparity, and a
-            # successor access bumps the disparity once more, so the largest value the
-            # register can reach is num_entries + 1 (access_disparity <= pq_length_i and
-            # pq_length_i <= num_entries, plus one final increment). If max_ad_val can hold
-            # that, the allocation condition alone prevents overflow and no explicit cap is
-            # needed; otherwise add the cap.
+            # corresponding_entry_allocated now requires pq_length_i > access_disparity
+            # (i.e. access_disparity <= pq_length_i - 1), and a successor access bumps
+            # the disparity once more, so the largest value the register can reach is
+            # num_entries (access_disparity <= pq_length_i - 1 and pq_length_i <=
+            # num_entries, plus one final increment). If max_ad_val can hold that, the
+            # allocation condition alone prevents overflow and no explicit cap is needed;
+            # otherwise add the cap.
             if max_ad_val <= self.configs.pq.num_entries:
                 conditions.append(
                     access_disparity <= Val(max_ad_val, size=ad_width_actual)
@@ -204,10 +228,12 @@ class DependencyChecker(Generator):
         """Same-BB disparity: a simple signed up/down counter. +1 per successor
         access, -1 per predecessor completion."""
         access_disparity = LogicVec(em, "access_disparity", "r", ad_width, is_signed=True)
-        # If the successor port executes sequentially before the predecessor port,
-        # initialise the disparity to 0 (the pred already executed once, nothing to
-        # check); otherwise 1 (one P access still to check).
-        ad_initial_value = 1 if not self.configs.succ_can_execute_once else 0
+        # AD holds the index of the last pending predecessor access to check
+        # (count - 1). If the successor port executes sequentially before the
+        # predecessor port, initialise the disparity to -1 (the pred already
+        # executed once, nothing to check); otherwise 0 (one P access still to
+        # check, at index 0).
+        ad_initial_value = 0 if not self.configs.succ_can_execute_once else -1
         access_disparity.regInit(init=ad_initial_value)
 
         inc_ad = LogicVec(em, "inc_access_disparity", "w", ad_width, is_signed=True)
@@ -236,9 +262,10 @@ class DependencyChecker(Generator):
         entry `ad_oh` points at, that dependency is satisfied: return to the
         NEGATIVE state with credit reset to 0.
 
-        The returned `access_disparity` is the head-relative count of pending
-        predecessor entries to check: 0 in NEGATIVE, (distance head->ad_oh)+1 in
-        POSITIVE. That integer feeds the shared check-mask/conflict block."""
+        The returned `access_disparity` is the head-relative index of the last
+        pending predecessor entry to check (count - 1): 0 in NEGATIVE (don't
+        care, masked out by is_positive), the head->ad_oh distance in POSITIVE.
+        That integer feeds the shared check-mask/conflict block."""
         n_pq = self.configs.pq.num_entries
         pq_addr_width = math.ceil(math.log2(n_pq))
         n_sq = self.configs.sq.num_entries
@@ -397,23 +424,23 @@ class DependencyChecker(Generator):
         )
         credit.regInit(init=0)
 
-        # --- Disparity count: head -> ad_oh inclusive distance, +1 ---
-        # Unsigned: the cross-BB disparity is never negative (NEGATIVE state reads
-        # as 0, not a negative count), so it only needs pq_addr_width + 1 bits
-        # (max value n_pq, when the boundary sits one slot behind the head).
+        # --- Disparity: head -> ad_oh distance, maps directly to ad_oh's index ---
+        # access_disparity is the index (relative to the head) of the last
+        # pending predecessor entry to check - i.e. the same head_to_ad distance
+        # that locates ad_oh, with no extra +1. Unsigned: the cross-BB disparity
+        # is never negative (NEGATIVE state reads as 0), so it only needs
+        # pq_addr_width bits (max value n_pq - 1, when the boundary sits one
+        # slot behind the head).
         head_to_ad = LogicVec(em, "ad_head_to_ad", "w", pq_addr_width)
         WrapSub(em, head_to_ad, ad_oh_idx, pq.head_idx, n_pq)
-        head_to_ad_wide = LogicVec(em, "ad_head_to_ad_wide", "w", pq_addr_width + 1)
-        em.add_assignment(head_to_ad_wide, Bit(0).concat(head_to_ad))
-        access_disparity_count = LogicVec(em, "ad_disparity_count", "w", pq_addr_width + 1)
-        em.add_assignment(access_disparity_count, head_to_ad_wide + Val(1))
-        access_disparity = LogicVec(em, "access_disparity", "w", pq_addr_width + 1)
+        access_disparity = LogicVec(em, "access_disparity", "w", pq_addr_width)
         em.add_assignment(
             access_disparity,
-            access_disparity_count.when(is_positive).else_(Val(0, size=pq_addr_width + 1)),
+            head_to_ad.when(is_positive).else_(Val(0, size=pq_addr_width)),
         )
 
-        # POSITIVE -> the window [head .. ad_oh] inclusive (count); NEGATIVE -> 0.
+        # POSITIVE -> index of the window's last entry [head .. ad_oh] (head_to_ad
+        # distance); NEGATIVE -> 0.
         return ad_oh, pq.head_oh, is_positive, access_disparity
 
     def _make_bb_ports(self, em: Emitter, prefix: str, ready):
