@@ -41,11 +41,22 @@ class DependencyChecker(Generator):
     access that precedes them in program order has either completed or is
     known to target a different address.
 
-    Both schemes produce the same three things, combined in `generate`:
+    In the default (out-of-order) mode both schemes produce the same three
+    things, combined in `generate`:
       - `check_mask`: the physical predecessor slots whose addresses the
         successor at the head must be compared against,
       - `no_dep_pending`: the head successor has no pending predecessor left,
       - scheme-specific extra grant conditions.
+
+    With `configs.forced_sequential` the address comparison is dropped
+    entirely and the grant is `no_dep_pending` alone: the successor waits
+    until every predecessor access preceding it in program order has
+    completed, even if the addresses would not have conflicted. WHERE the
+    pending predecessors sit then no longer matters, so all boundary
+    tracking reduces to counting: same-BB keeps only the disparity counter
+    (`_same_bb_sequential_check`), cross-BB keeps the dep arrays' mark and
+    dependent bits but replaces the whole boundary/announce machinery with
+    a single go-token counter (`_cross_bb_sequential_check`).
 
     The scheme depends on whether the two queues belong to the same BB:
 
@@ -105,6 +116,26 @@ class DependencyChecker(Generator):
         allow_pq_access_o = self._add_port(Logic(em, "allow_pq_access", "o"))
         # TODO: Only allow predecessor access when the access disparity bit cannot overflow
         em.add_assignment(allow_pq_access_o, Bit(1))
+
+        if self.configs.forced_sequential:
+            # Forced-sequential mode: no addresses are compared (pq_addr,
+            # pq_done, pq_length and sq_head stay unused, like pq_done in the
+            # cross-BB scheme); the grant is `no_dep_pending` alone.
+            if crosses_bb:
+                no_dep_pending = self._cross_bb_sequential_check(
+                    em, pq_done_en_i, sq_access_en_i
+                )
+            else:
+                no_dep_pending = self._same_bb_sequential_check(
+                    em, pq_done_en_i, sq_access_en_i
+                )
+            em.add_comment(
+                "Forced-sequential: allow the successor access only once every\n"
+                "\tpredecessor access preceding it in program order has completed.\n"
+            )
+            em.add_assignment(allow_sq_access_o, no_dep_pending)
+            self._write_to_file(em, path_rtl, out_file)
+            return
 
         if crosses_bb:
             check_mask, no_dep_pending, conditions = self._cross_bb_check(
@@ -235,6 +266,20 @@ class DependencyChecker(Generator):
         em.add_assignment(dec_ad, Val(1).when(pq_done_en).else_(Val(0)))
         em.add_assignment(access_disparity, (access_disparity + inc_ad) - dec_ad)
         return access_disparity
+
+    def _same_bb_sequential_check(self, em: Emitter, pq_done_en_i, sq_access_en_i):
+        """Forced-sequential same-BB scheme: only the disparity counter
+        remains. The head successor is granted exactly when AD < 0, i.e.
+        every predecessor access it could depend on has completed. Compared
+        to `_same_bb_check` there is no check window (no addresses are
+        compared), no allocation gate (no predecessor entry is ever
+        inspected), and no overflow cap (the grant this gates keeps AD <= 0
+        even after its own increment)."""
+        ad_width = self.configs.access_disparity_width
+        access_disparity = self._ad_counter(em, ad_width, sq_access_en_i, pq_done_en_i)
+        no_dep_pending = Logic(em, "no_dep_pending", "w")
+        em.add_assignment(no_dep_pending, access_disparity < Val(0, size=ad_width))
+        return no_dep_pending
 
     # ===----------------------------------------------------------------------===
     # Cross-BB scheme
@@ -457,6 +502,71 @@ class DependencyChecker(Generator):
 
         return check_mask, no_dep_pending, [corresponding_entry_allocated]
 
+    def _cross_bb_sequential_check(self, em: Emitter, pq_done_en, sq_access_en):
+        """Forced-sequential cross-BB scheme: the out-of-order scheme's dep
+        arrays plus a single token counter - no boundary register, no
+        searches, no satisfaction-clear walk.
+
+        The dep arrays are reused as-is (`_build_dep_arrays`): a mark on a
+        predecessor entry means "last predecessor before some dependent
+        successor"; a successor's dependent bit means "first successor of
+        its run - the only one of the run that has to wait" (later
+        successors of the same run share its boundary and sit behind it in
+        the queue anyway). Since no addresses are compared, WHERE those
+        marks sit never matters - and because predecessors complete in
+        program order while successors fire in program order, the k-th mark
+        to pop always belongs to the k-th dependent successor to reach the
+        head. So the pairing needs no positional tracking at all:
+
+          - a marked predecessor popping produces one go-token
+            (every predecessor of that boundary has now completed),
+          - the dependent successor at the head fires iff a token is
+            available, consuming it; independent successors pass freely.
+
+        Tokens absorb boundaries that complete before their successor
+        reaches the head - the job of the out-of-order scheme's
+        satisfaction-clear walk - so the S bits are never cleared in place
+        and simply pop with their entry. At most one token per queued
+        dependent successor can be outstanding (marks and dependent stamps
+        are created one-for-one), which bounds the counter at n_sq."""
+        n_sq = self.configs.sq.num_entries
+        token_width = self.configs.sq.q_addr_width + 1  # holds 0 .. n_sq
+
+        pq, sq, _, _, _ = self._build_dep_arrays(
+            em, pq_done_en, sq_access_en, with_clears=False
+        )
+
+        marked_pop = Logic(em, "marked_pop", "w")
+        em.add_assignment(marked_pop, pq_done_en & pq.array_at_head)
+        dependent_fire = Logic(em, "dependent_fire", "w")
+        em.add_assignment(dependent_fire, sq_access_en & sq.array_at_head)
+
+        tokens = LogicVec(em, "boundary_tokens", "r", token_width)
+        inc_tokens = LogicVec(em, "inc_boundary_tokens", "w", token_width)
+        dec_tokens = LogicVec(em, "dec_boundary_tokens", "w", token_width)
+        em.add_assignment(inc_tokens, Val(1).when(marked_pop).else_(Val(0)))
+        em.add_assignment(dec_tokens, Val(1).when(dependent_fire).else_(Val(0)))
+        em.add_assignment(tokens, (tokens + inc_tokens) - dec_tokens)
+        tokens.regInit(init=0)
+
+        sq_not_empty = Logic(em, "sq_dep_not_empty", "w")
+        em.add_assignment(
+            sq_not_empty,
+            Val(sq.head.getNameRead()) != Val(sq.tail.getNameRead()),
+        )
+
+        # Grant: the head successor's dep entry must exist (its BB has
+        # executed - also shields the registered array/pointer reads from
+        # stale slots on a push into an empty queue), and it must be
+        # independent or have its boundary already completed.
+        tokens_available = Logic(em, "tokens_available", "w")
+        em.add_assignment(tokens_available, tokens != Val(0, size=token_width))
+        no_dep_pending = Logic(em, "no_dep_pending", "w")
+        em.add_assignment(
+            no_dep_pending, sq_not_empty & (~sq.array_at_head | tokens_available)
+        )
+        return no_dep_pending
+
     def _make_bb_ports(self, em: Emitter, prefix: str, ready):
         valid_i = self._add_port(Logic(em, f"{prefix}_bb_valid", "i"))
         ready_o = self._add_port(Logic(em, f"{prefix}_bb_ready", "o"))
@@ -640,7 +750,7 @@ class DependencyChecker(Generator):
 
         return pop_announce, deferred_announce, sq_not_empty
 
-    def _build_dep_arrays(self, em: Emitter, pq_done_en, sq_access_en):
+    def _build_dep_arrays(self, em: Emitter, pq_done_en, sq_access_en, with_clears=True):
         """Instantiate the predecessor/successor dependency arrays and the few
         derived signals the cross-BB scheme consumes.
 
@@ -656,8 +766,11 @@ class DependencyChecker(Generator):
 
         sq_write_value = Logic(em, "sq_write_value", "w")
         # Per-bit satisfaction clears, driven by `_cross_bb_check` (which owns
-        # the announce/satisfaction logic).
-        sq_clear_bits = LogicVec(em, "sq_clear_bits", "w", n_sq_entries)
+        # the announce/satisfaction logic). The forced-sequential scheme needs
+        # none: its token counter absorbs early boundary completions.
+        sq_clear_bits = (
+            LogicVec(em, "sq_clear_bits", "w", n_sq_entries) if with_clears else None
+        )
 
         # Successor dep array first, so sq_bb_executed is available to mark
         # the predecessor array's dependency boundaries.

@@ -164,10 +164,11 @@ class Structure(Generator):
         # One DependencyChecker def per unique module shape. The queue pair alone
         # is not enough: cross-BB vs same-BB edges produce different ports and
         # logic (see DependencyChecker.generate's crosses_bb branch), and
-        # succ_can_execute_once / access_disparity_width change the body too. Edges
-        # that differ in any of these must get distinct defs, otherwise a shared
-        # def's port list won't match what _route_bb_ports wires per instance
-        # (e.g. a same-BB instance reusing a cross-BB def has no bb_valid mapping).
+        # succ_can_execute_once / access_disparity_width / forced_sequential change
+        # the body too. Edges that differ in any of these must get distinct defs,
+        # otherwise a shared def's port list won't match what _route_bb_ports wires
+        # per instance (e.g. a same-BB instance reusing a cross-BB def has no
+        # bb_valid mapping).
         dc_def_map = {}
         edge_to_dc_key = {}
         for edge_idx, (src_port, dst_port) in enumerate(
@@ -183,6 +184,7 @@ class Structure(Generator):
                 crosses_bb,
                 dc_config.succ_can_execute_once,
                 dc_config.access_disparity_width,
+                dc_config.forced_sequential,
             )
             edge_to_dc_key[edge_idx] = key
             if key not in dc_def_map:

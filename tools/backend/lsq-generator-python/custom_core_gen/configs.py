@@ -57,6 +57,10 @@ class DependencyCheckerConfig:
         False  # Whether this dependency checker checks for dependencies in reverse order
     )
     access_disparity_width: int = 4
+    forced_sequential: bool = (
+        False  # Never compare addresses: grant a successor access only once every
+        # predecessor access preceding it in program order has completed
+    )
 
     def __init__(
         self, config: dict, pq: "QueueConfig" = None, sq: "QueueConfig" = None, pq_bb: int = None, sq_bb: int = None
@@ -68,6 +72,7 @@ class DependencyCheckerConfig:
         self.succ_can_execute_once = config.get("succCanExecuteOnce")
         self.access_disparity_width = config.get("AccessDisparityWidth")
         self.dep_entry_ratio = config.get("depEntryRatio", 1)
+        self.forced_sequential = config.get("forcedSequential", False)
 
     @staticmethod
     def from_parts(
@@ -79,6 +84,7 @@ class DependencyCheckerConfig:
         obj.access_disparity_width = dc_config.get("AccessDisparityWidth")
         obj.succ_can_execute_once = dc_config.get("succCanExecuteOnce")
         obj.dep_entry_ratio = dc_config.get("depEntryRatio", 1)
+        obj.forced_sequential = dc_config.get("forcedSequential", False)
         return obj
 
 
