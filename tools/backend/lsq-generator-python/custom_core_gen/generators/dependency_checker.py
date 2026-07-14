@@ -99,8 +99,14 @@ class DependencyChecker(Generator):
                 self.configs.pq.addr_width,
             )
         )
-        pq_done_i = self._add_port(
-            LogicVec(em, "pq_done", "i", self.configs.pq.q_addr_width)
+        # Omitted when the pq has a single entry (q_addr_width == 0): there is
+        # no index to expose (Queue._generate_observable_ports omits the
+        # matching done_ptr_o the same way), and the only consumer
+        # (_same_bb_check's rotation) is a no-op on a width-1 array anyway.
+        pq_done_i = (
+            self._add_port(LogicVec(em, "pq_done", "i", self.configs.pq.q_addr_width))
+            if self.configs.pq.q_addr_width > 0
+            else None
         )
         pq_done_en_i = self._add_port(Logic(em, "pq_done_en", "i"))
         pq_length_i = self._add_port(LogicVec(em, "pq_length", "i", pq_ptr_width))
@@ -217,7 +223,12 @@ class DependencyChecker(Generator):
                 Bit(1).when(Val(i, size=cmp_width) <= ad_cmp).else_(Bit(0)),
             )
         check_mask = LogicVec(em, "check_mask", "w", n_pq)
-        CyclicRightShift(em, check_mask, ones, pq_done_i)
+        if pq_done_i is None:
+            # n_pq == 1: rotating a single-entry array by any amount is a
+            # no-op, and there is no done-pointer index to rotate by anyway.
+            em.add_assignment(check_mask, ones)
+        else:
+            CyclicRightShift(em, check_mask, ones, pq_done_i)
 
         # AD < 0: every predecessor access this successor could depend on has
         # already completed.
@@ -485,15 +496,20 @@ class DependencyChecker(Generator):
         # queue has allocated them: the head -> ad_oh distance (the index of
         # the window's last entry) must be below pq_length. Only meaningful
         # when a boundary is resolved.
-        ad_oh_idx = LogicVec(em, "ad_oh_idx", "w", pq_addr_width)
-        OHToBits(em, ad_oh_idx, ad_oh)
-        head_to_ad = LogicVec(em, "ad_head_to_ad", "w", pq_addr_width)
-        WrapSub(em, head_to_ad, ad_oh_idx, pq.head_idx, n_pq)
-
         head_to_ad_ext = LogicVec(em, "ad_head_to_ad_ext", "w", pq_ptr_width)
-        em.add_assignment(
-            head_to_ad_ext, Val(0, pq_ptr_width - pq_addr_width).concat(head_to_ad)
-        )
+        if pq_addr_width == 0:
+            # n_pq == 1: the only physical slot is simultaneously head and
+            # boundary, so the distance between them is always 0.
+            em.add_assignment(head_to_ad_ext, Val(0, pq_ptr_width))
+        else:
+            ad_oh_idx = LogicVec(em, "ad_oh_idx", "w", pq_addr_width)
+            OHToBits(em, ad_oh_idx, ad_oh)
+            head_to_ad = LogicVec(em, "ad_head_to_ad", "w", pq_addr_width)
+            WrapSub(em, head_to_ad, ad_oh_idx, pq.head_idx, n_pq)
+
+            em.add_assignment(
+                head_to_ad_ext, Val(0, pq_ptr_width - pq_addr_width).concat(head_to_ad)
+            )
         corresponding_entry_allocated = Logic(em, "corresponding_entry_allocated", "w")
         em.add_assignment(
             corresponding_entry_allocated,
@@ -595,10 +611,15 @@ class DependencyChecker(Generator):
         em.add_assignment(tail, tail_next)
         tail.regInit(init=0, enable=tail_en)
 
-        tail_idx = LogicVec(em, f"{prefix}_dep_tail_idx", "w", addr_width)
-        em.add_assignment(tail_idx, Val(em.slice_var(tail.getNameRead(), addr_width - 1, 0)))
         tail_oh = LogicVec(em, f"{prefix}_dep_tail_oh", "w", n_entries)
-        BitsToOH(em, tail_oh, tail_idx)
+        if addr_width == 0:
+            # Single-entry array (n_entries == 1): no physical index exists,
+            # the lone slot is always both tail and head.
+            em.add_assignment(tail_oh, Val(1, size=1))
+        else:
+            tail_idx = LogicVec(em, f"{prefix}_dep_tail_idx", "w", addr_width)
+            em.add_assignment(tail_idx, Val(em.slice_var(tail.getNameRead(), addr_width - 1, 0)))
+            BitsToOH(em, tail_oh, tail_idx)
 
         # Empty before the push (head == tail). When empty there is no
         # most-recent entry, so a mark must be suppressed: otherwise it lands
@@ -659,32 +680,46 @@ class DependencyChecker(Generator):
         full = Logic(em, f"{prefix}_dep_full", "w")
         tail_msb = Val(em.index_var(tail.getNameRead(), addr_width))
         head_msb = Val(em.index_var(head.getNameRead(), addr_width))
-        tail_low = Val(em.slice_var(tail.getNameRead(), addr_width - 1, 0))
-        head_low = Val(em.slice_var(head.getNameRead(), addr_width - 1, 0))
-        em.add_assignment(full, (tail_msb != head_msb) & (tail_low == head_low))
-
-        head_idx = LogicVec(em, f"{prefix}_dep_head_idx", "w", addr_width)
-        em.add_assignment(head_idx, Val(em.slice_var(head.getNameRead(), addr_width - 1, 0)))
-        array_at_head = Logic(em, f"{prefix}_array_at_head", "w")
-        MuxLookUp(em, array_at_head, array, head_idx)
+        if addr_width == 0:
+            # No low bits to compare (the pointer is pure generation bit).
+            em.add_assignment(full, tail_msb != head_msb)
+        else:
+            tail_low = Val(em.slice_var(tail.getNameRead(), addr_width - 1, 0))
+            head_low = Val(em.slice_var(head.getNameRead(), addr_width - 1, 0))
+            em.add_assignment(full, (tail_msb != head_msb) & (tail_low == head_low))
 
         # One-hot of the head index, used to anchor the boundary search, the
         # check window and the satisfaction clear.
         head_oh = LogicVec(em, f"{prefix}_dep_head_oh", "w", n_entries)
-        BitsToOH(em, head_oh, head_idx)
-
-        # Same-cycle next-state view of head_oh: head_idx/head_oh are built
-        # from the registered head (pre-edge), so a pop landing this very
-        # cycle (head_en) is invisible to them until the next edge. Anything
-        # that needs "where the head is, accounting for a pop happening right
-        # now" (e.g. the boundary search pivot) must use this instead.
-        head_idx_next = LogicVec(em, f"{prefix}_dep_head_idx_next", "w", addr_width)
-        em.add_assignment(
-            head_idx_next,
-            Val(em.slice_var(head_next.getNameRead(), addr_width - 1, 0)).when(head_en).else_(head_idx),
-        )
+        array_at_head = Logic(em, f"{prefix}_array_at_head", "w")
         head_oh_next = LogicVec(em, f"{prefix}_dep_head_oh_next", "w", n_entries)
-        BitsToOH(em, head_oh_next, head_idx_next)
+        if addr_width == 0:
+            # Single-entry array: the lone slot is always the head, and stays
+            # the head even "accounting for a pop happening right now" - there
+            # is nowhere else for it to point. No index exists to hand back
+            # (callers needing it, e.g. the cross-BB boundary search, must
+            # special-case addr_width == 0 themselves).
+            head_idx = None
+            em.add_assignment(array_at_head, array[0])
+            em.add_assignment(head_oh, Val(1, size=1))
+            em.add_assignment(head_oh_next, Val(1, size=1))
+        else:
+            head_idx = LogicVec(em, f"{prefix}_dep_head_idx", "w", addr_width)
+            em.add_assignment(head_idx, Val(em.slice_var(head.getNameRead(), addr_width - 1, 0)))
+            MuxLookUp(em, array_at_head, array, head_idx)
+            BitsToOH(em, head_oh, head_idx)
+
+            # Same-cycle next-state view of head_oh: head_idx/head_oh are built
+            # from the registered head (pre-edge), so a pop landing this very
+            # cycle (head_en) is invisible to them until the next edge. Anything
+            # that needs "where the head is, accounting for a pop happening right
+            # now" (e.g. the boundary search pivot) must use this instead.
+            head_idx_next = LogicVec(em, f"{prefix}_dep_head_idx_next", "w", addr_width)
+            em.add_assignment(
+                head_idx_next,
+                Val(em.slice_var(head_next.getNameRead(), addr_width - 1, 0)).when(head_en).else_(head_idx),
+            )
+            BitsToOH(em, head_oh_next, head_idx_next)
 
         return _DepArray(
             array=array, head=head, tail=tail, tail_en=tail_en, tail_oh=tail_oh,

@@ -124,11 +124,19 @@ class DependencyCheckerInstance:
             queue.port_vars[map[port_name]].append(c_signal)
 
     def init_port_vars(self, em):
+        # pq_done_i (and its queue-side counterpart done_ptr_o) are omitted
+        # together whenever the predecessor queue has a single entry
+        # (q_addr_width == 0 - see DependencyChecker.generate and
+        # Queue._generate_observable_ports): there is no pointer index to
+        # carry. Skip any DC map entry whose DC-side port doesn't exist on
+        # this particular def.
         for port_name in DC_TO_PQ_MAP.keys():
-            self.connect_ports(port_name, DC_TO_PQ_MAP, self.pred, em)
+            if port_name in self.ports:
+                self.connect_ports(port_name, DC_TO_PQ_MAP, self.pred, em)
 
         for port_name in DC_TO_SQ_MAP.keys():
-            self.connect_ports(port_name, DC_TO_SQ_MAP, self.succ, em)
+            if port_name in self.ports:
+                self.connect_ports(port_name, DC_TO_SQ_MAP, self.succ, em)
 
     def instantate(self, em):
         self.dp_def.instantiate(
@@ -212,12 +220,20 @@ class Structure(Generator):
         pq_keys, pq_vals = set(DC_TO_PQ_MAP.keys()), set(DC_TO_PQ_MAP.values())
         sq_keys, sq_vals = set(DC_TO_SQ_MAP.keys()), set(DC_TO_SQ_MAP.values())
 
+        # pq_done_i/done_ptr_o are the one pair omitted together whenever a
+        # predecessor queue has a single entry (q_addr_width == 0); every
+        # other mapped port always exists, so the representative-def checks
+        # below stay meaningful for them regardless of which def/config is
+        # picked as the representative.
+        pq_keys_req = pq_keys - {"pq_done_i"}
+        pq_vals_req = pq_vals - {"done_ptr_o"}
+
         assert (
-            pq_keys <= dc_ports
-        ), f"DC_TO_PQ_MAP keys not in DC ports:      {pq_keys - dc_ports}"
+            pq_keys_req <= dc_ports
+        ), f"DC_TO_PQ_MAP keys not in DC ports:      {pq_keys_req - dc_ports}"
         assert (
-            pq_vals <= pq_ports
-        ), f"DC_TO_PQ_MAP values not in pred ports:  {pq_vals - pq_ports}"
+            pq_vals_req <= pq_ports
+        ), f"DC_TO_PQ_MAP values not in pred ports:  {pq_vals_req - pq_ports}"
         assert (
             sq_keys <= dc_ports
         ), f"DC_TO_SQ_MAP keys not in DC ports:      {sq_keys - dc_ports}"
@@ -226,6 +242,27 @@ class Structure(Generator):
         ), f"DC_TO_SQ_MAP values not in succ ports:  {sq_vals - sq_ports}"
         assert dc_ports <= (pq_keys | sq_keys | CROSS_BB_DC_PORTS), \
             f"DC ports not fully mapped: {dc_ports - (pq_keys | sq_keys | CROSS_BB_DC_PORTS)}"
+
+        # Per-instance consistency: pq_done_i on a DC def must be present iff
+        # done_ptr_o is present on that def's own predecessor queue def (both
+        # keyed off the same pq.q_addr_width == 0 condition, but generated
+        # independently) - otherwise connect_ports would silently wire nothing
+        # for a port one side actually has.
+        for key, dc_def in dc_def_map.items():
+            src_queue_idx = key[0]
+            pq_has_ptr = config.queues[src_queue_idx].q_addr_width > 0
+            assert ("pq_done_i" in dc_def.ports) == pq_has_ptr, (
+                f"pq_done_i presence mismatch on DC def {dc_def.name} "
+                f"(pq.q_addr_width > 0 = {pq_has_ptr})"
+            )
+        for port_idx, queue_config_idx in enumerate(config.ports_to_queue):
+            if port_idx not in pred_ports:
+                continue
+            pq_has_ptr = config.queues[queue_config_idx].q_addr_width > 0
+            assert ("done_ptr_o" in queue_defs[port_idx].ports) == pq_has_ptr, (
+                f"done_ptr_o presence mismatch on queue def for port {port_idx} "
+                f"(q_addr_width > 0 = {pq_has_ptr})"
+            )
 
         # Count ports per queue config
         group_sizes = defaultdict(int)

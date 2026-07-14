@@ -137,7 +137,11 @@ class Queue(Generator):
         mem_addr_from_queue = LogicVec(
             em, "mem_addr_from_queue", "w", self.configs.addr_width
         )
-        MuxLookUp(em, mem_addr_from_queue, q_addr, q_issue_sel)
+        if q_issue_sel is None:
+            # Single-entry queue: the only entry is always the one to issue.
+            em.add_assignment(mem_addr_from_queue, q_addr[0])
+        else:
+            MuxLookUp(em, mem_addr_from_queue, q_addr, q_issue_sel)
         if self.configs.bypass:
             em.add_assignment(
                 mem_addr_o, circ_addr_i.when(bypass_active).else_(mem_addr_from_queue)
@@ -217,15 +221,21 @@ class Queue(Generator):
 
         q_tail_oh = LogicVec(em, "q_tail_oh", "w", self.configs.num_entries)
 
-        # BitsToOH and MuxLookUp need the physical index (lower n bits only)
-        q_tail_idx = LogicVec(em, "q_tail_idx", "w", n)
-        em.add_assignment(q_tail_idx, Val(em.slice_var(q_tail.getNameRead(), n - 1, 0)))
-        BitsToOH(em, q_tail_oh, q_tail_idx)
+        if n == 0:
+            # Single-entry queue (NumEntries == 1): there is no physical index
+            # to compute, the lone entry is always "tail" and always "issue".
+            em.add_assignment(q_tail_oh, Val(1, size=1))
+            q_issue_sel = None
+        else:
+            # BitsToOH and MuxLookUp need the physical index (lower n bits only)
+            q_tail_idx = LogicVec(em, "q_tail_idx", "w", n)
+            em.add_assignment(q_tail_idx, Val(em.slice_var(q_tail.getNameRead(), n - 1, 0)))
+            BitsToOH(em, q_tail_oh, q_tail_idx)
 
-        q_issue_sel = LogicVec(em, "q_issue_sel", "w", n)
-        em.add_assignment(
-            q_issue_sel, Val(em.slice_var(q_issue.getNameRead(), n - 1, 0))
-        )
+            q_issue_sel = LogicVec(em, "q_issue_sel", "w", n)
+            em.add_assignment(
+                q_issue_sel, Val(em.slice_var(q_issue.getNameRead(), n - 1, 0))
+            )
 
         alloc_en = Logic(em, "alloc_en", "w")
         head_en = Logic(em, "head_en", "w")
@@ -250,12 +260,17 @@ class Queue(Generator):
         q_tail.regInit(init=0, enable=alloc_en)
         q_head.regInit(init=0, enable=head_en)
 
-        # Full between tail and done: lower bits match but generation bits differ
+        # Full between tail and done: lower bits match but generation bits differ.
+        # With n == 0 (single-entry queue) the pointer IS the generation bit -
+        # there are no low bits to compare, so equality is trivial.
         tail_msb = Val(em.index_var(q_tail.getNameRead(), n))
         done_msb = Val(em.index_var(q_done.getNameRead(), n))
-        tail_low = Val(em.slice_var(q_tail.getNameRead(), n - 1, 0))
-        done_low = Val(em.slice_var(q_done.getNameRead(), n - 1, 0))
-        em.add_assignment(q_full, (tail_msb != done_msb) & (tail_low == done_low))
+        if n == 0:
+            em.add_assignment(q_full, tail_msb != done_msb)
+        else:
+            tail_low = Val(em.slice_var(q_tail.getNameRead(), n - 1, 0))
+            done_low = Val(em.slice_var(q_done.getNameRead(), n - 1, 0))
+            em.add_assignment(q_full, (tail_msb != done_msb) & (tail_low == done_low))
 
         # Empty: all bits (including generation) equal
         em.add_assignment(q_empty, q_tail == q_head)
@@ -263,11 +278,14 @@ class Queue(Generator):
         # Full between issue and head: same lower bits, different generation
         issue_msb = Val(em.index_var(q_issue.getNameRead(), n))
         head_msb = Val(em.index_var(q_head.getNameRead(), n))
-        issue_low = Val(em.slice_var(q_issue.getNameRead(), n - 1, 0))
-        head_low = Val(em.slice_var(q_head.getNameRead(), n - 1, 0))
-        em.add_assignment(
-            q_full_w_issue, (issue_msb != head_msb) & (issue_low == head_low)
-        )
+        if n == 0:
+            em.add_assignment(q_full_w_issue, issue_msb != head_msb)
+        else:
+            issue_low = Val(em.slice_var(q_issue.getNameRead(), n - 1, 0))
+            head_low = Val(em.slice_var(q_head.getNameRead(), n - 1, 0))
+            em.add_assignment(
+                q_full_w_issue, (issue_msb != head_msb) & (issue_low == head_low)
+            )
 
         return (
             q_done,
@@ -310,15 +328,21 @@ class Queue(Generator):
         for i in range(self.configs.num_entries):
             em.add_assignment(q_addr_out_o[i], q_addr[i])
 
-        done_ptr_o = self._add_port(LogicVec(em, "done_ptr", "o", n))
-        alloc_ptr_o = self._add_port(LogicVec(em, "alloc_ptr", "o", n))
-        head_ptr_o = self._add_port(LogicVec(em, "head_ptr", "o", n))
+        # With n == 0 (single-entry queue) there is no index to expose: the
+        # pointer register is pure generation bit, so these ports would be
+        # zero-width. Omit them; nothing downstream needs a done/alloc/head
+        # index into a 1-entry buffer (DependencyChecker.pq_done_i is omitted
+        # the same way, see DependencyChecker.generate).
+        if n > 0:
+            done_ptr_o = self._add_port(LogicVec(em, "done_ptr", "o", n))
+            alloc_ptr_o = self._add_port(LogicVec(em, "alloc_ptr", "o", n))
+            head_ptr_o = self._add_port(LogicVec(em, "head_ptr", "o", n))
 
-        em.add_assignment(done_ptr_o, Val(em.slice_var(q_done.getNameRead(), n - 1, 0)))
-        em.add_assignment(
-            alloc_ptr_o, Val(em.slice_var(q_tail.getNameRead(), n - 1, 0))
-        )
-        em.add_assignment(head_ptr_o, Val(em.slice_var(q_head.getNameRead(), n - 1, 0)))
+            em.add_assignment(done_ptr_o, Val(em.slice_var(q_done.getNameRead(), n - 1, 0)))
+            em.add_assignment(
+                alloc_ptr_o, Val(em.slice_var(q_tail.getNameRead(), n - 1, 0))
+            )
+            em.add_assignment(head_ptr_o, Val(em.slice_var(q_head.getNameRead(), n - 1, 0)))
 
         # Number of entries from done to tail (allocated but not yet complete).
         length_o = self._add_port(LogicVec(em, "length", "o", ptr_width))
@@ -331,12 +355,16 @@ class Queue(Generator):
         em.add_assignment(access_en_o, head_en)
 
         if self.configs.is_succ:
-            q_head_sel = LogicVec(em, "q_head_sel", "w", n)
-            em.add_assignment(
-                q_head_sel, Val(em.slice_var(q_head.getNameRead(), n - 1, 0))
-            )
             queue_head_w = LogicVec(em, "queue_head_w", "w", self.configs.addr_width)
-            MuxLookUp(em, queue_head_w, q_addr, q_head_sel)
+            if n == 0:
+                # Single entry: it is always the head.
+                em.add_assignment(queue_head_w, q_addr[0])
+            else:
+                q_head_sel = LogicVec(em, "q_head_sel", "w", n)
+                em.add_assignment(
+                    q_head_sel, Val(em.slice_var(q_head.getNameRead(), n - 1, 0))
+                )
+                MuxLookUp(em, queue_head_w, q_addr, q_head_sel)
             queue_head_o = self._add_port(
                 LogicVec(em, "queue_head", "o", self.configs.addr_width)
             )

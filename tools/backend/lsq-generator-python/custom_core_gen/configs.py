@@ -40,7 +40,9 @@ class QueueConfig:
         assert self.data_width > 0, "DataWidth must be greater than 0"
         assert self.addr_width > 0, "AddrWidth must be greater than 0"
         assert self.id_width > 0, "IDWidth must be greater than 0"
-        assert self.q_addr_width > 0, "QueueAddrWidth must be greater than 0"
+        # q_addr_width == 0 is the degenerate single-entry queue (NumEntries == 1):
+        # there is no index to represent, only the ptr_width == 1 generation bit.
+        # Generators special-case this rather than requiring q_addr_width > 0.
         assert (
             0 <= self.id_val < (1 << self.id_width)
         ), f"IDVal must be between 0 and {(1 << self.id_width) - 1}"
