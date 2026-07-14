@@ -508,8 +508,12 @@ void OrderingNetworkGenerationInfo::fromPorts(FuncMemoryPorts &ports) {
   const unsigned depthLoad = 16;
   const unsigned depthStore = 16;
 
+  // stResp is always set to false in LSQ generation, however the option exists
+  bool stResp = false;
+
   // Assign a global port index to each access port (in program order across
-  // all groups) and build the vertex→group mapping.
+  // all groups) and build the vertex→group mapping. Each access port gets its
+  // own queue config (queues[i] belongs to port i).
   unsigned globalIdx = 0;
   DenseMap<StringRef, unsigned> nameToPortIdx;
 
@@ -518,14 +522,17 @@ void OrderingNetworkGenerationInfo::fromPorts(FuncMemoryPorts &ports) {
       portBBIds.push_back(groupID);
       nameToPortIdx[getUniqueName(accessPort.portOp)] = globalIdx;
 
-      // For now, just index into a single load/store queue, later more advanced
-      // size analysis and configuration, e.g. have a config per port instead of
-      // a shared config for every store/load which can then be compressed if
-      // there are two ports with the same configs
+      portsToQueue.push_back(globalIdx); // index into queues: per-access config
+
       if (isa<LoadPort>(accessPort)) {
-        portsToQueue.push_back(0); // index into queues: load config
+        queues.emplace_back("load", depthLoad, ports.dataWidth,
+                            ports.addrWidth, ports.addrWidth, /*idVal=*/0,
+                            llvm::Log2_64_Ceil(depthLoad), false);
       } else {
-        portsToQueue.push_back(1); // index into queues: store config
+        assert(isa<StorePort>(accessPort) && "port must be load or store");
+        queues.emplace_back("store", depthStore, ports.dataWidth,
+                            ports.addrWidth, ports.addrWidth, /*idVal=*/0,
+                            llvm::Log2_64_Ceil(depthStore), stResp);
       }
 
       ++globalIdx;
@@ -552,19 +559,6 @@ void OrderingNetworkGenerationInfo::fromPorts(FuncMemoryPorts &ports) {
       ++globalIdx;
     }
   }
-
-  // stResp is always set to false in LSQ generation, however the option exists
-  bool stResp = false;
-
-  // Two shared queue configs: one for all load ports, one for all store
-  // ports. queues[0] = load queue, queues[1] = store queue.
-  // TODO: See if idWidth/val is still necessary (was for AXI interface)
-  queues.emplace_back("load", depthLoad, ports.dataWidth, ports.addrWidth,
-                      ports.addrWidth, /*idVal=*/0,
-                      llvm::Log2_64_Ceil(depthLoad), false);
-  queues.emplace_back("store", depthStore, ports.dataWidth, ports.addrWidth,
-                      ports.addrWidth, /*idVal=*/0,
-                      llvm::Log2_64_Ceil(depthStore), stResp);
 
   for (unsigned i = 0; i < sources.size(); i++) {
     // if the source is ahead of the destination in program order,
