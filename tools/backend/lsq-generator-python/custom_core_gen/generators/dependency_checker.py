@@ -28,6 +28,7 @@ class _DepArray:
     tail_en: object        # Logic: tail push enable
     tail_oh: object        # LogicVec: one-hot of the tail index (n_entries)
     full: object           # Logic: queue full
+    empty: object          # Logic: queue empty (head == tail)
     array_at_head: object  # Logic: bit at the head slot
     mark_consumed: object  # Logic or None: mark hit an already-popped entry
     head_idx: object       # LogicVec: head index (addr_width)
@@ -120,8 +121,10 @@ class DependencyChecker(Generator):
         ######  Outputs ######
         allow_sq_access_o = self._add_port(Logic(em, "allow_sq_access", "o"))
         allow_pq_access_o = self._add_port(Logic(em, "allow_pq_access", "o"))
-        # TODO: Only allow predecessor access when the access disparity bit cannot overflow
-        em.add_assignment(allow_pq_access_o, Bit(1))
+
+        # Set by `_build_dep_arrays` (cross-BB schemes only); stays None for the
+        # same-BB schemes, which track order with a counter and own no arrays.
+        self._dep_arrays = None
 
         if self.configs.forced_sequential:
             # Forced-sequential mode: no addresses are compared (pq_addr,
@@ -139,7 +142,12 @@ class DependencyChecker(Generator):
                 "Forced-sequential: allow the successor access only once every\n"
                 "\tpredecessor access preceding it in program order has completed.\n"
             )
-            em.add_assignment(allow_sq_access_o, no_dep_pending)
+            allow_pq, extra_sq = self._bb_execution_gates()
+            em.add_assignment(allow_pq_access_o, allow_pq)
+            em.add_assignment(
+                allow_sq_access_o,
+                reduce(lambda a, b: a & b, [no_dep_pending] + extra_sq),
+            )
             self._write_to_file(em, path_rtl, out_file)
             return
 
@@ -170,12 +178,47 @@ class DependencyChecker(Generator):
             "\t- AND its address conflicts with no pending predecessor entry\n"
             "\t  (trivially true when nothing is pending anymore)\n"
         )
+        allow_pq, extra_sq = self._bb_execution_gates()
+        em.add_assignment(allow_pq_access_o, allow_pq)
         em.add_assignment(
             allow_sq_access_o,
-            reduce(lambda a, b: a & b, conditions + [~conflict | no_dep_pending]),
+            reduce(
+                lambda a, b: a & b,
+                conditions + extra_sq + [~conflict | no_dep_pending],
+            ),
         )
 
         self._write_to_file(em, path_rtl, out_file)
+
+    def _bb_execution_gates(self):
+        """Gates that keep each dep array's pops matched to its pushes.
+
+        An entry is pushed when the BB executes and popped when the port's queue
+        retires (`sq_access_en`) or completes (`pq_done_en`) an access. Those are
+        separate handshakes: the BB ctrl token is back-pressured by *every* dep
+        array on that BB's side (`structure._route_bb_ports` ANDs their readies),
+        while a queue's address path is back-pressured only by its own depth. So
+        one full array can stall the ctrl token while the other ports' queues
+        keep retiring addresses, popping arrays that are already empty and
+        running the head past the tail. At NumEntries == 1 the pointer is a bare
+        generation bit, making `empty` and `full` exact complements, so a single
+        such pop latches `full` high forever: `bb_ready` drops and the BB never
+        executes again.
+
+        Gating the queue's `allow_access_i` on its own dep array being non-empty
+        closes the window - the queue cannot retire an access whose BB execution
+        has not been recorded yet. It holds back both pop sources at once, since
+        `allow_access_i` feeds `head_en` and `can_issue`/`done_en` follow the
+        head.
+
+        Returns (allow_pq, extra_sq_conditions).
+        """
+        if self._dep_arrays is None:
+            # Same-BB schemes own no dep arrays: order is tracked by a counter,
+            # there is no BB handshake, and nothing can underflow.
+            return Bit(1), []
+        pq, sq = self._dep_arrays
+        return ~pq.empty, [~sq.empty]
 
     # ===----------------------------------------------------------------------===
     # Same-BB scheme
@@ -723,7 +766,8 @@ class DependencyChecker(Generator):
 
         return _DepArray(
             array=array, head=head, tail=tail, tail_en=tail_en, tail_oh=tail_oh,
-            full=full, array_at_head=array_at_head, mark_consumed=mark_already_consumed,
+            full=full, empty=empty, array_at_head=array_at_head,
+            mark_consumed=mark_already_consumed,
             head_idx=head_idx, head_oh=head_oh, head_oh_next=head_oh_next,
             n_entries=n_entries,
         )
@@ -825,6 +869,9 @@ class DependencyChecker(Generator):
         em.add_assignment(first_sq_bb, ~sq_executed_last & sq_bb_executed)
         pq = self._make_dep_array(em, "pq", n_pq_entries, pq_done_en, mark_en=first_sq_bb)
         pq_bb_executed = self._make_bb_ports(em, "pq", ~pq.full)
+
+        # Published for `generate`'s access gates (see `_dep_arrays`).
+        self._dep_arrays = (pq, sq)
 
         em.add_assignment(pq.tail_en, pq_bb_executed)
         em.add_assignment(sq.tail_en, sq_bb_executed)
