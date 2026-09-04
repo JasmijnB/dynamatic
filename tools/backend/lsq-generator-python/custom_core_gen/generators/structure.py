@@ -152,6 +152,7 @@ class Structure(Generator):
 
     def generate_from_json(self, em, config: OrderingNetworkConfig, out_path):
         out_file = f"{out_path}/{self.name}.{em.get_file_suffix()}"
+        open(out_file, "w").close()
 
         # Derive pred/succ roles from graph topology
         pred_ports = set(config.edge_src)
