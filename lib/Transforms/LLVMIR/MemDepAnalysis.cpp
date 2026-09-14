@@ -568,24 +568,25 @@ public:
 
   // clang-format on
   void computeIntersections() {
-    for (auto *storeInst : memInsts) {
-      if (!storeInst->mayWriteToMemory())
-        continue;
-
+    for (auto *firstInst : memInsts) {
       // Checking for RAW and WAW conflicts between storeInst and secondInst
       for (auto *secondInst : memInsts) {
         /* Skip checking with self */
-        if (secondInst == storeInst)
+        if (firstInst == secondInst)
+          continue;
+
+        /* Skip load-load dependencies (don't exist) */
+        if (isa<LoadInst>(firstInst) && isa<LoadInst>(secondInst))
           continue;
 
         // No need to check between different arrays
-        if (instToBase[secondInst] != instToBase[storeInst]) {
+        if (instToBase[firstInst] != instToBase[secondInst]) {
           continue;
         }
 
-        int commonDepth = getOutMostCommonLoopDepth(secondInst, storeInst);
+        int commonDepth = getOutMostCommonLoopDepth(secondInst, firstInst);
 
-        auto pair = InstPairType(storeInst, secondInst);
+        auto pair = InstPairType(firstInst, secondInst);
 
         isl::map instMap, wrInstMap;
 
@@ -593,13 +594,11 @@ public:
         // - The store instruction has a GIID on secondInst (i.e., the
         // dependency of store on secondInst is **always** enforced by data
         // dependency).
-        //
         bool hasDependency =
-            instrDependenceInfo.hasTokenDependence(storeInst, secondInst) ||
-            instrDependenceInfo.hasRevTokenDependence(storeInst, secondInst);
+            instrDependenceInfo.hasTokenDependence(firstInst, secondInst) ||
+            instrDependenceInfo.hasRevTokenDependence(firstInst, secondInst);
 
-        auto *loadInst = dyn_cast_or_null<LoadInst>(secondInst);
-        if (loadInst != nullptr && hasDependency) {
+        if (hasDependency) {
           // Consecutive top-level loops will finish the load before any store,
           // since there is an operand dependency.
           if (commonDepth == 0 && scopMinDepth == 1)
@@ -607,13 +606,13 @@ public:
           assert(commonDepth - scopMinDepth + 1 >= 0);
           unsigned depthToKeep = commonDepth - scopMinDepth + 1;
           instMap = getMap(secondInst, depthToKeep, true);
-          wrInstMap = getMap(storeInst, depthToKeep, false);
+          wrInstMap = getMap(firstInst, depthToKeep, false);
         } else {
           // Generic case: we cannot put any restrictions on the indices being
           // processed by the instructions, if there are no token flow that can
           // be established between them. Therefore, we intersect the sets of
           // all possible indices ever accessed
-          wrInstMap = getMap(storeInst, 0, false);
+          wrInstMap = getMap(firstInst, 0, false);
           instMap = getMap(secondInst, 0, false);
         }
 
@@ -656,10 +655,7 @@ struct IndexAnalysis {
 
   std::vector<Instruction *> otherInsts;
 
-  // NOTE: in the legacy implementation they were called "instRAWlist". But this
-  // was actually imprecise, as this contains also RAW dependencies.
-  std::set<InstPairType> dependentReadAndWritePairs;
-  std::set<InstPairType> dependentWriteAndWritePairs;
+  std::set<InstPairType> dependentPairs;
   std::set<BasicBlock *> bbList;
   std::map<BasicBlock *, int> bbToScopMap;
   std::map<Instruction *, Value *> instToBase;
@@ -838,15 +834,8 @@ void MemDepAnalysisPass::processScop(Scop &scop,
     indexAnalysis.instToBase[inst] = baseAddr;
   }
 
-  for (auto pair : meta.getIntersectionList()) {
-    // The convention used in ScopMeta class is that the first element in an
-    // instPair is a store instruction. Thus, checking the type of the second
-    // instruction tells us whther it is a RAW/WAW dependency
-    if (pair.second->mayWriteToMemory())
-      indexAnalysis.dependentWriteAndWritePairs.insert(pair);
-    else
-      indexAnalysis.dependentReadAndWritePairs.insert(pair);
-  }
+  for (auto pair : meta.getIntersectionList())
+    indexAnalysis.dependentPairs.insert(pair);
 
   scopMeta.push_back(meta);
 }
@@ -867,84 +856,65 @@ std::vector<InstPairType>
 MemDepAnalysisPass::getDependencyPairs(Function &llvmFunction,
                                        const SameScopHelper &sameScopHelper) {
   std::vector<InstPairType> depPairList;
-  for (auto *storeInst : getAllInsts<StoreInst>(&llvmFunction)) {
-    // Find RAW dependencies
-    for (auto *loadInst : getAllInsts<LoadInst>(&llvmFunction)) {
 
-      InstPairType rawPair = std::make_pair(storeInst, loadInst);
+  // Every load and store in the function. Iterating over ordered pairs of these
+  // visits each combination twice, once per direction, and every visit decides
+  // exactly one dependency: "first must be ordered before second". RAW, WAR and
+  // WAW therefore all fall out of this single traversal.
+  std::vector<Instruction *> accesses;
+  for (BasicBlock &bb : llvmFunction)
+    for (Instruction &inst : bb)
+      if (isa<LoadInst, StoreInst>(inst))
+        accesses.push_back(&inst);
+
+  for (auto *first : accesses) {
+    for (auto *second : accesses) {
+      if (first == second)
+        continue;
+
+      // Two loads can never conflict.
+      if (isa<LoadInst>(first) && isa<LoadInst>(second))
+        continue;
 
       // NOTE: In dynamatic we assume that memory with different base addresses
       // are store in separate RAMs. Two instructions targetting differing base
       // arrays can never conflict.
-      if (!equalBase(storeInst, loadInst))
+      if (!equalBase(first, second))
         continue;
 
-      // Instructions are in the same scop: use the result from IndexAnalysis
-      if (sameScopHelper.sameScop(loadInst, storeInst)) {
-        if (indexAnalysis.dependentReadAndWritePairs.count(rawPair))
-          depPairList.push_back(rawPair);
+      InstPairType depPair = std::make_pair(first, second);
+
+      // Instructions are in the same scop: use the result from IndexAnalysis,
+      // which already decided this ordering in computeIntersections().
+      if (sameScopHelper.sameScop(first, second)) {
+        if (indexAnalysis.dependentPairs.count(depPair))
+          depPairList.push_back(depPair);
 
         LLVM_DEBUG({
-          if (!indexAnalysis.dependentReadAndWritePairs.count(rawPair)) {
+          if (!indexAnalysis.dependentPairs.count(depPair)) {
             llvm::dbgs() << "--------------------------------------------\n";
             llvm::dbgs() << "The following memory access instruction pair "
                             "proven to be independent according to polyhedral "
                             "analysis:\n";
-            loadInst->dump();
-            storeInst->dump();
+            first->dump();
+            second->dump();
           }
         });
         continue;
       }
 
-      // Instruction are in different Scops: use the result from alias analysis
+      // Instructions are in different Scops: use the result from alias analysis
       AliasResult aliasResult = aliasAnalysis->alias(
-          MemoryLocation::get(loadInst), MemoryLocation::get(storeInst));
+          MemoryLocation::get(first), MemoryLocation::get(second));
 
-      // If they always or sometimes alias:
-      if (aliasResult != AliasResult::NoAlias) {
-        // If the pair of load/store potentially access the same memory
-        // location, then we consider two cases:
-        //   1. If it is possible to reach from the load inst to the store, then
-        //   we add the WAR dependency
-        //   2. If it is possible to reach from the store inst to the load, then
-        //   we add the RAW dep
-        if (isPotentiallyReachable(storeInst, loadInst))
-          depPairList.emplace_back(storeInst, loadInst);
-        if (isPotentiallyReachable(loadInst, storeInst))
-          depPairList.emplace_back(loadInst, storeInst);
-      }
-    }
-    // Find WAW dependencies
-    for (auto *secondStoreInst : getAllInsts<StoreInst>(&llvmFunction)) {
-      if (secondStoreInst == storeInst)
+      // If they never alias, no ordering between them can ever be violated.
+      if (aliasResult == AliasResult::NoAlias)
         continue;
 
-      // NOTE: In dynamatic we assume that memory with different base addresses
-      // are store in separate RAMs. Two instructions targetting differing base
-      // arrays can never conflict.
-      if (!equalBase(storeInst, secondStoreInst))
-        continue;
-
-      auto pair = InstPairType(secondStoreInst, storeInst);
-      auto pairRev = InstPairType(storeInst, secondStoreInst);
-
-      // Instructions are in the same scop: use the result from IndexAnalysis
-      if (sameScopHelper.sameScop(storeInst, secondStoreInst)) {
-        if (indexAnalysis.dependentWriteAndWritePairs.count(pair) > 0)
-          depPairList.push_back(pair);
-        else if (indexAnalysis.dependentWriteAndWritePairs.count(pairRev) > 0)
-          depPairList.push_back(pairRev);
-        continue;
-      }
-
-      // Otherwise, use results from alias analysis:
-      AliasResult aliasResult = aliasAnalysis->alias(
-          MemoryLocation::get(storeInst), MemoryLocation::get(secondStoreInst));
-      // If they always or sometimes alias:
-      if (aliasResult != AliasResult::NoAlias) {
-        depPairList.push_back(pair);
-      }
+      // They may touch the same location, so order them -- but only if this
+      // direction is actually realizable in the CFG.
+      if (isPotentiallyReachable(first, second))
+        depPairList.push_back(depPair);
     }
   }
 
