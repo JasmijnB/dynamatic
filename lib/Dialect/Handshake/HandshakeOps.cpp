@@ -1481,34 +1481,6 @@ SmallVector<Value> MemOrderingUnitOp::getControlPaths(Operation *ctrlOp) {
 }
 
 //===----------------------------------------------------------------------===//
-// OrderingNetworkOp
-//===----------------------------------------------------------------------===//
-
-// TODO: Implement
-void OrderingNetworkOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                              Value memref, Value memStart, ValueRange inputs,
-                              Value ctrlEnd, ArrayRef<unsigned> groupSizes,
-                              unsigned numLoads) {}
-
-// TODO: Implement
-void OrderingNetworkOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                              handshake::MemoryControllerOp mcOp,
-                              ValueRange inputs, ArrayRef<unsigned> groupSizes,
-                              unsigned numLoads) {}
-
-// TODO: Implement
-ParseResult OrderingNetworkOp::parse(OpAsmParser &parser,
-                                     OperationState &result) {
-  return success();
-}
-
-// TODO: Implement
-void OrderingNetworkOp::print(OpAsmPrinter &p) {}
-
-// TODO: Implement
-LogicalResult OrderingNetworkOp::verify() { return success(); }
-
-//===----------------------------------------------------------------------===//
 // Specific port kinds
 //===----------------------------------------------------------------------===//
 

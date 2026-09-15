@@ -386,39 +386,6 @@ TypedValue<ControlType> MemOrderingUnitOp::getCtrlEnd() {
   return cast<TypedValue<ControlType>>(getOperands().back());
 }
 
-// TODO: Implement
-std::string handshake::OrderingNetworkOp::getOperandName(unsigned idx) {
-  return "";
-}
-
-// TODO: Implement
-std::string handshake::OrderingNetworkOp::getResultName(unsigned idx) {
-  return "";
-}
-
-// TODO: Implement
-bool OrderingNetworkOp::isMasterInterface() { return false; }
-
-// TODO: Implement
-TypedValue<MemRefType> OrderingNetworkOp::getMemRef() {
-  llvm_unreachable("TODO");
-}
-
-// TODO: Implement
-TypedValue<ControlType> OrderingNetworkOp::getMemStart() {
-  llvm_unreachable("TODO");
-}
-
-// TODO: Implement
-TypedValue<ControlType> OrderingNetworkOp::getMemEnd() {
-  llvm_unreachable("TODO");
-}
-
-// TODO: Implement
-TypedValue<ControlType> OrderingNetworkOp::getCtrlEnd() {
-  llvm_unreachable("TODO");
-}
-
 //===----------------------------------------------------------------------===//
 // EagerForkLikeOpInterface
 //===----------------------------------------------------------------------===//
