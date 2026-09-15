@@ -590,13 +590,26 @@ public:
 
         isl::map instMap, wrInstMap;
 
-        // Condition:
-        // - The store instruction has a GIID on secondInst (i.e., the
-        // dependency of store on secondInst is **always** enforced by data
-        // dependency).
+        // GIID between the two accesses, both directions, both analyses. The
+        // forward and backward walks are incomparable (see the doc comment on
+        // InstructionDependenceInfo), so each direction tries both.
+        //
+        // The result is symmetric in (first, second) and is used to drop the
+        // same-iteration constraint J == I. That is justified either way:
+        //  - first --GIID--> second: second(I) consumes a token derived from
+        //    first(I), so dataflow already orders them.
+        //  - second --GIID--> first: the token path crosses no back-edge of a
+        //    loop containing first, so second precedes first in program order
+        //    within an iteration; "first(I) before second(I)" is never
+        //    required. The real constraint, second(I) before first(I), is
+        //    handled by the mirrored pair under the previous case.
+        // What remains is first(I) vs second(J), J > I, computed below.
         bool hasDependency =
             instrDependenceInfo.hasTokenDependence(firstInst, secondInst) ||
-            instrDependenceInfo.hasRevTokenDependence(firstInst, secondInst);
+            instrDependenceInfo.hasRevTokenDependence(firstInst, secondInst) ||
+            instrDependenceInfo.hasTokenDependence(secondInst, firstInst) ||
+            instrDependenceInfo.hasRevTokenDependence(secondInst, firstInst) 
+            ;
 
         if (hasDependency) {
           // Consecutive top-level loops will finish the load before any store,
