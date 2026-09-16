@@ -147,6 +147,8 @@ struct IntegrationTest {
   // Enable speculation, using the speculate pragma
   bool useSpeculation = false;
   bool useDuplication = false;
+  // Use ordering networks instead of LSQs for memory ordering.
+  bool useOrderingNetwork = false;
   std::string milpSolver = "gurobi";
   std::string bufferAlgorithm = "fpga20";
   unsigned clockPeriod = 5;
@@ -195,6 +197,7 @@ int IntegrationTest::run() {
              << (this->useSpeculation ? " --speculation" : "")
              << (this->useDuplication ? " --enable-duplication" : "")
              << (this->instrumentII ? " --instrument-ii" : "")
+             << (this->useOrderingNetwork ? " --use-ordering-network" : "")
              << " --milp-solver " << this->milpSolver << std::endl;
   // clang-format on
 
@@ -298,6 +301,8 @@ class DuplicationFixture : public BaseFixture {};
 
 class RigidificationFixture : public BaseFixture {};
 class VerifyInvariantsFixture : public BaseFixture {};
+class OrderingNetworkFixture : public BaseFixture {};
+class OrderingNetworkMemoryFixture : public BaseFixture {};
 
 TEST_P(BasicFixture, basic) {
   IntegrationTest config{
@@ -501,6 +506,44 @@ TEST_P(DuplicationFixture, basic) {
       .testVerilog = false,
       .useSharing = false,
       .useDuplication = true,
+      .milpSolver = "gurobi",
+      .bufferAlgorithm = "fpga20",
+      .simTime = -1
+      // clang-format on
+  };
+  EXPECT_EQ(config.run(), 0);
+  RecordProperty("cycles", std::to_string(config.simTime));
+  logPerformance(config.simTime);
+}
+
+TEST_P(OrderingNetworkFixture, basic) {
+  IntegrationTest config{
+      // clang-format off
+      .name = GetParam(),
+      .testName = getVerboseOutdirSuffix(),
+      .benchmarkPath = fs::path(DYNAMATIC_ROOT) / "integration-test",
+      .testVerilog = true,
+      .useSharing = false,
+      .useOrderingNetwork = true,
+      .milpSolver = "gurobi",
+      .bufferAlgorithm = "fpga20",
+      .simTime = -1
+      // clang-format on
+  };
+  EXPECT_EQ(config.run(), 0);
+  RecordProperty("cycles", std::to_string(config.simTime));
+  logPerformance(config.simTime);
+}
+
+TEST_P(OrderingNetworkMemoryFixture, basic) {
+  IntegrationTest config{
+      // clang-format off
+      .name = GetParam(),
+      .testName = getVerboseOutdirSuffix(),
+      .benchmarkPath = fs::path(DYNAMATIC_ROOT) / "integration-test" / "memory",
+      .testVerilog = true,
+      .useSharing = false,
+      .useOrderingNetwork = true,
       .milpSolver = "gurobi",
       .bufferAlgorithm = "fpga20",
       .simTime = -1
@@ -742,6 +785,64 @@ INSTANTIATE_TEST_SUITE_P(
       "interpolate"
       ),
       [](const auto &info) { return info.param; });
+
+INSTANTIATE_TEST_SUITE_P(
+    MiscBenchmarks, OrderingNetworkFixture,
+    // only cover the tests with any dependency edges
+    testing::Values(
+      "atax",
+      "atax_float",
+      "bicg",
+      "bicg_float",
+      "covariance",
+      "gaussian",
+      "gemver",
+      "gemver_float",
+      "get_tanh",
+      "histogram",
+      "insertion_sort",
+      "jacobi_1d_imper",
+      "kernel_2mm",
+      "kernel_2mm_float",
+      "kernel_3mm",
+      "kernel_3mm_float",
+      "kmp",
+      "loop_array",
+      "lu",
+      "matching",
+      "matching_2",
+      "matrix_power",
+      "pivot",
+      "polyn_mult",
+      "symm_float",
+      "syr2k_float",
+      "threshold",
+      "triangular",
+      "while_loop_1"
+      ),
+      [](const auto &info) { return info.param; });
+
+INSTANTIATE_TEST_SUITE_P(
+    MemoryBenchmarks, OrderingNetworkMemoryFixture,
+    // only cover the memory tests that contain an LSQ
+    testing::Values(
+      "test_memory_3",
+      "test_memory_4",
+      "test_memory_5",
+      "test_memory_6",
+      "test_memory_7",
+      "test_memory_8",
+      "test_memory_9",
+      "test_memory_11",
+      "test_memory_13",
+      "test_memory_14",
+      "test_memory_15",
+      "test_memory_16",
+      "test_memory_17",
+      "test_smallbound",
+      "test_internal_array"
+      ),
+      [](const auto &info) { return "memory_" + info.param; });
 
 #ifdef DYNAMATIC_ENABLE_CBC
 // Smoke test: Using the CBC MILP solver to optimize some simple benchmarks
