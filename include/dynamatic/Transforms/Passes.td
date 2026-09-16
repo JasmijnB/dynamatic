@@ -219,6 +219,10 @@ def HandshakeReplaceMemoryInterfaces : DynamaticPass<
     are tagged with the basic block they belong to, and that all memory access
     operations are uniquely named.
   }];
+  let options = [
+    Option<"useOrderingNetwork", "use-ordering-network", "bool", "false",
+      "Whether to use ordering networks instead of LSQs when replacing memory interfaces">,
+  ];
 }
 
 def HandshakeRemoveUnusedMemRefs : Pass<

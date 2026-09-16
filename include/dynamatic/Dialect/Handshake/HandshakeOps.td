@@ -1117,7 +1117,7 @@ def MemoryControllerOp : Handshake_Op<"mem_controller", [
   }];
 }
 
-def LSQOp : Handshake_Op<"lsq", [
+def MemOrderingUnitOp : Handshake_Op<"lsq", [
   DeclareOpInterfaceMethods<MemoryOpInterface>,
   // The IOs of a MemoryControllerOp have custom names,
   // As they are complex, they are declared here,
@@ -1126,7 +1126,7 @@ def LSQOp : Handshake_Op<"lsq", [
 ]> {
   let summary = "load-store queue  (dynamatic)";
   let description = [{
-    Each `LSQOp` represents an interface to an externally defined unidimensional
+    Each `MemOrderingUnitOp` represents an interface to an externally defined unidimensional
     memory. In terms of circuit connectivity and semantics it is quite similar
     to the `MemoryControllerOp` operation (see the latter's documentation), with
     some important differences outlined below.
@@ -1167,15 +1167,19 @@ def LSQOp : Handshake_Op<"lsq", [
     3. Control signal indicating completion.
   }];
 
-  let arguments = (ins Variadic<AnyType>:$inputs, I32ArrayAttr:$groupSizes);
+  let arguments = (ins Variadic<AnyType>:$inputs, I32ArrayAttr:$groupSizes,
+                       MemOrderingKindEnumAttr:$orderingKind);
   let results = (outs Variadic<HandshakeType>:$outputs);
 
   let builders = [
     OpBuilder<(ins "Value":$memref, "Value":$memStart, "ValueRange":$inputs,
-                   "Value":$ctrlEnd, "ArrayRef<unsigned>":$groupSizes, "unsigned":$numLoads)>,
+                   "Value":$ctrlEnd, "ArrayRef<unsigned>":$groupSizes, "unsigned":$numLoads, 
+                   "::dynamatic::handshake::MemOrderingKind":$orderingKind)>,
     OpBuilder<(ins "::dynamatic::handshake::MemoryControllerOp":$mcOp,
                    "ValueRange":$inputs, "ArrayRef<unsigned>":$groupSizes,
-                   "unsigned":$numLoads)>,
+                   "unsigned":$numCircuitLoads, "unsigned":$numMCLoads,
+                   "unsigned":$numMCStores,
+                   "::dynamatic::handshake::MemOrderingKind":$orderingKind)>,
   ];
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;
@@ -1222,7 +1226,7 @@ def LSQOp : Handshake_Op<"lsq", [
 
   let extraClassDefinition = [{
     ::mlir::FailureOr<::llvm::SmallVector<::mlir::NamedAttribute>>
-    LSQOp::getRTLParameters() {
+    MemOrderingUnitOp::getRTLParameters() {
       return ::llvm::SmallVector<::mlir::NamedAttribute>{
       };
     }

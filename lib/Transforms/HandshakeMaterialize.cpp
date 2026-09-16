@@ -128,7 +128,7 @@ static void promoteEagerToLazyForks(handshake::FuncOp funcOp) {
   // Associate all eager forks feeding group allocation signals to any LSQ to
   // the set of their results that must become lazy
   DenseMap<handshake::ForkOp, SetVector<Value>> lazyChannels;
-  for (auto lsqOp : funcOp.getOps<handshake::LSQOp>()) {
+  for (auto lsqOp : funcOp.getOps<handshake::MemOrderingUnitOp>()) {
     LSQPorts lsqPorts = lsqOp.getPorts();
     ValueRange lsqInputs = lsqOp.getOperands();
     for (LSQGroup &group : lsqPorts.getGroups()) {

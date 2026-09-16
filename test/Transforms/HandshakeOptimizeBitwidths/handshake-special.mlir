@@ -73,7 +73,7 @@ handshake.func @memAddrOpt(%mem: memref<1000xi32>, %mem_start: !handshake.contro
 // CHECK-LABEL:   handshake.func @memAddrOptMasterSlave(
 // CHECK-SAME:                                          %[[VAL_0:.*]]: memref<1000xi32>, %[[VAL_1:.*]]: !handshake.control<>, %[[VAL_2:.*]]: !handshake.control<>, ...) -> (!handshake.channel<i32>, !handshake.control<>) attributes {argNames = ["mem", "mem_start", "start"], resNames = ["out0", "out1"]} {
 // CHECK:           %[[VAL_3:.*]], %[[VAL_4:.*]] = mem_controller{{\[}}%[[VAL_0]] : memref<1000xi32>] %[[VAL_1]] (%[[VAL_5:.*]], %[[VAL_6:.*]], %[[VAL_7:.*]], %[[VAL_8:.*]]#1, %[[VAL_8]]#2, %[[VAL_8]]#3) %[[VAL_2]] {connectedBlocks = [0 : i32]} :    (!handshake.channel<i32>, !handshake.channel<i10>, !handshake.channel<i32>, !handshake.channel<i10>, !handshake.channel<i10>, !handshake.channel<i32>) -> !handshake.channel<i32>
-// CHECK:           %[[VAL_8]]:4 = lsq[MC] (%[[VAL_2]], %[[VAL_9:.*]], %[[VAL_10:.*]], %[[VAL_11:.*]], %[[VAL_3]])  {groupSizes = [2 : i32]} : (!handshake.control<>, !handshake.channel<i10>, !handshake.channel<i10>, !handshake.channel<i32>, !handshake.channel<i32>) -> (!handshake.channel<i32>, !handshake.channel<i10>, !handshake.channel<i10>, !handshake.channel<i32>)
+// CHECK:           %[[VAL_8]]:4 = lsq[MC] (%[[VAL_2]], %[[VAL_9:.*]], %[[VAL_10:.*]], %[[VAL_11:.*]], %[[VAL_3]])  {groupSizes = [2 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.channel<i10>, !handshake.channel<i10>, !handshake.channel<i32>, !handshake.channel<i32>) -> (!handshake.channel<i32>, !handshake.channel<i10>, !handshake.channel<i10>, !handshake.channel<i32>)
 // CHECK:           %[[VAL_12:.*]] = constant %[[VAL_2]] {value = 0 : i10} : <>, <i10>
 // CHECK:           %[[VAL_13:.*]] = constant %[[VAL_2]] {value = 500 : i10} : <>, <i10>
 // CHECK:           %[[VAL_14:.*]] = constant %[[VAL_2]] {value = 42 : i32} : <>, <i32>
@@ -86,7 +86,7 @@ handshake.func @memAddrOpt(%mem: memref<1000xi32>, %mem_start: !handshake.contro
 // CHECK:         }
 handshake.func @memAddrOptMasterSlave(%mem: memref<1000xi32>, %mem_start: !handshake.control<>, %start: !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>) {
   %ldDataToLSQ, %done = mem_controller[%mem : memref<1000xi32>] %mem_start (%ctrl1, %stAddr2, %stData2, %ldAddrToMC, %stAddrToMC, %stdDataToMC) %start {connectedBlocks = [0 : i32]} : (!handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>) -> !handshake.channel<i32>
-  %ldData1, %ldAddrToMC, %stAddrToMC, %stdDataToMC = lsq[MC] (%start, %ldAddr1, %stAddr1, %stData1, %ldDataToLSQ) {groupSizes = [2 : i32]} : (!handshake.control<>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>) -> (!handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>)
+  %ldData1, %ldAddrToMC, %stAddrToMC, %stdDataToMC = lsq[MC] (%start, %ldAddr1, %stAddr1, %stData1, %ldDataToLSQ) {groupSizes = [2 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>) -> (!handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>)
   %addr1 = constant %start {value = 0 : i8} : <>, <i8>
   %addr2 = constant %start {value = 500 : i16}: <>, <i16>
   %addr3 = constant %start {value = 999 : i32}: <>, <i32>

@@ -51,6 +51,9 @@ struct HandshakeReplaceMemoryInterfacesPass
     : public dynamatic::impl::HandshakeReplaceMemoryInterfacesBase<
           HandshakeReplaceMemoryInterfacesPass> {
 
+  using HandshakeReplaceMemoryInterfacesBase::
+      HandshakeReplaceMemoryInterfacesBase;
+
   void runDynamaticPass() override;
 
 private:
@@ -162,20 +165,26 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::replaceForMemRef(
   // Identify all memory interfaces (master and potential slaves) for the region
   auto masterIface = cast<MemoryOpInterface>(*memrefUsers.begin());
   handshake::MemoryControllerOp mcOp = nullptr;
-  handshake::LSQOp lsqOp;
-  if (lsqOp = dyn_cast<handshake::LSQOp>(masterIface.getOperation()); !lsqOp) {
+  handshake::MemOrderingUnitOp lsqOp;
+  if (lsqOp =
+          dyn_cast<handshake::MemOrderingUnitOp>(masterIface.getOperation());
+      !lsqOp) {
     // The master memory interface must be an MC
     mcOp = cast<handshake::MemoryControllerOp>(masterIface.getOperation());
 
     // There may still be an LSQ slave interface, look for it
     MCPorts ports = mcOp.getPorts();
-    if (ports.connectsToLSQ())
-      lsqOp = ports.getLSQPort().getLSQOp();
+    if (ports.connectsToOrderingUnit())
+      lsqOp = ports.getOrderingUnitPort().getOrderingUnitOp();
   }
 
   // Context and builder for creating new operation
+  handshake::MemOrderingKind orderingKind =
+      useOrderingNetwork ? handshake::MemOrderingKind::OrderingNetwork
+                         : handshake::MemOrderingKind::LSQ;
   MemoryInterfaceBuilder memBuilder(funcOp, memref, masterIface.getMemStart(),
-                                    masterIface.getCtrlEnd(), ctrlVals);
+                                    masterIface.getCtrlEnd(), ctrlVals,
+                                    orderingKind);
 
   // Collect all access ports related to the memory region under consideration
   DenseSet<MemPortOpInterface> regionPorts;
@@ -212,14 +221,14 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::replaceForMemRef(
     if (memAttr.connectsToMC())
       memBuilder.addMCPort(portOp);
     else
-      memBuilder.addLSQPort(*memAttr.getLsqGroup(), portOp);
+      memBuilder.addLSQPort(*memAttr.getGroup(), portOp);
   }
 
   // Instantiate new memory interfaces
   MLIRContext *ctx = &getContext();
   OpBuilder builder(ctx);
   handshake::MemoryControllerOp newMCOp;
-  handshake::LSQOp newLSQOp;
+  handshake::MemOrderingUnitOp newLSQOp;
   if (failed(memBuilder.instantiateInterfaces(builder, newMCOp, newLSQOp)))
     return failure();
   assert(newMCOp || newLSQOp && "no new interface instantiated");
@@ -304,8 +313,8 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::updateMemoryAccessMarks(
 
   // Identify all memory interfaces (master and potential slaves) for the region
   Operation *memOp = *memrefUsers.begin();
-  handshake::LSQOp lsqOp;
-  if (lsqOp = dyn_cast<handshake::LSQOp>(memOp); !lsqOp) {
+  handshake::MemOrderingUnitOp lsqOp;
+  if (lsqOp = dyn_cast<handshake::MemOrderingUnitOp>(memOp); !lsqOp) {
     // The master memory interface must be an MC
     auto mcOp = dyn_cast<handshake::MemoryControllerOp>(memOp);
     if (!mcOp)
@@ -318,11 +327,12 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::updateMemoryAccessMarks(
         setDialectAttr<MemInterfaceAttr>(port.portOp, ctx);
     }
     // Nothing else to do if the region has no LSQ
-    if (!mcPorts.connectsToLSQ()) {
-      LLVM_DEBUG(llvm::dbgs() << "\tNo LSQ interface for the region\n");
+    if (!mcPorts.connectsToOrderingUnit()) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "\tNo ordering unit interface for the region\n");
       return success();
     }
-    lsqOp = mcPorts.getLSQPort().getLSQOp();
+    lsqOp = mcPorts.getOrderingUnitPort().getOrderingUnitOp();
   }
 
   DenseSet<Operation *> lsqAccessOps;
@@ -341,14 +351,15 @@ LogicalResult HandshakeReplaceMemoryInterfacesPass::updateMemoryAccessMarks(
       markOpsWithActiveDependencies(lsqAccessOps);
 
   for (Operation *accessOp : lsqAccessOps) {
-    if (isLSQPort.lookup(accessOp))
-      // mark the access op as an LSQ port by setting the attribute with the
-      // group ID
-      setDialectAttr<MemInterfaceAttr>(accessOp, ctx, groupMap.at(accessOp));
-    else
-      // mark the access op as a non-LSQ port by setting the attribute without a
-      // group ID
+    if (isLSQPort.lookup(accessOp)) {
+      handshake::MemOrderingKind kind =
+          useOrderingNetwork ? handshake::MemOrderingKind::OrderingNetwork
+                             : handshake::MemOrderingKind::LSQ;
+      setDialectAttr<MemInterfaceAttr>(accessOp, ctx, groupMap.at(accessOp),
+                                       kind);
+    } else {
       setDialectAttr<MemInterfaceAttr>(accessOp, ctx);
+    }
   }
   return success();
 }

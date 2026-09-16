@@ -652,8 +652,8 @@ void ftd::addSuppOperandConsumer(mlir::OpBuilder &builder,
     // branch
     if (llvm::isa_and_nonnull<handshake::MemoryControllerOp>(consumerOp) ||
         llvm::isa_and_nonnull<handshake::MemoryControllerOp>(producerOp) ||
-        llvm::isa_and_nonnull<handshake::LSQOp>(producerOp) ||
-        llvm::isa_and_nonnull<handshake::LSQOp>(consumerOp) ||
+        llvm::isa_and_nonnull<handshake::MemOrderingUnitOp>(producerOp) ||
+        llvm::isa_and_nonnull<handshake::MemOrderingUnitOp>(consumerOp) ||
         llvm::isa_and_nonnull<handshake::ControlMergeOp>(producerOp) ||
         llvm::isa_and_nonnull<handshake::ControlMergeOp>(consumerOp) ||
         llvm::isa_and_nonnull<handshake::ConditionalBranchOp>(consumerOp) ||

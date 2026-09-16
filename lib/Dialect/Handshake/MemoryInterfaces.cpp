@@ -54,13 +54,14 @@ void MemoryInterfaceBuilder::addLSQPort(unsigned group,
     ++lsqNumLoads;
   } else {
     assert(isa<handshake::StoreOp>(portOp) && "invalid LSQ port");
+    ++lsqNumStores;
   }
   lsqPorts[group].push_back(portOp);
 }
 
 LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
     OpBuilder &builder, handshake::MemoryControllerOp &mcOp,
-    handshake::LSQOp &lsqOp) {
+    handshake::MemOrderingUnitOp &lsqOp) {
   BackedgeBuilder edgeBuilder(builder, memref.getLoc());
 
   FConnectLoad connect = [&](LoadOp loadOp, Value dataIn) {
@@ -71,7 +72,7 @@ LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
 
 LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
     PatternRewriter &rewriter, handshake::MemoryControllerOp &mcOp,
-    handshake::LSQOp &lsqOp) {
+    handshake::MemOrderingUnitOp &lsqOp) {
   BackedgeBuilder edgeBuilder(rewriter, memref.getLoc());
   FConnectLoad connect = [&](LoadOp loadOp, Value dataIn) {
     rewriter.updateRootInPlace(loadOp, [&] { loadOp->setOperand(1, dataIn); });
@@ -82,7 +83,7 @@ LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
 LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
     OpBuilder &builder, BackedgeBuilder &edgeBuilder,
     const FConnectLoad &connect, handshake::MemoryControllerOp &mcOp,
-    handshake::LSQOp &lsqOp) {
+    handshake::MemOrderingUnitOp &lsqOp) {
 
   // Determine interfaces' inputs
   InterfaceInputs inputs;
@@ -104,46 +105,72 @@ LogicalResult MemoryInterfaceBuilder::instantiateInterfaces(
         mcNumLoads);
   } else if (inputs.mcInputs.empty() && !inputs.lsqInputs.empty()) {
     // We only need an LSQ
-    lsqOp = builder.create<handshake::LSQOp>(loc, memref, memStart,
-                                             inputs.lsqInputs, ctrlEnd,
-                                             inputs.lsqGroupSizes, lsqNumLoads);
+    lsqOp = builder.create<handshake::MemOrderingUnitOp>(
+        loc, memref, memStart, inputs.lsqInputs, ctrlEnd, inputs.lsqGroupSizes,
+        lsqNumLoads, orderingKind);
   } else {
     // We need a MC and an LSQ. They need to be connected with 4 new channels
     // so that the LSQ can forward its loads and stores to the MC. We need
     // load address, store address, and store data channels from the LSQ to
     // the MC and a load data channel from the MC to the LSQ
+    unsigned nLoads, nStores;
+
+    if (orderingKind == handshake::MemOrderingKind::LSQ) {
+      nLoads = nStores = 1;
+    } else {
+      nLoads = lsqNumLoads;
+      nStores = lsqNumStores;
+    }
+
     MemRefType memrefType = memref.getType().cast<MemRefType>();
 
-    // Create 3 backedges (load address, store address, store data) for the MC
-    // inputs that will eventually come from the LSQ.
+    // Create nLoads+nStores+nStores backedges for the MC inputs coming from the
+    // OU: one load address per load, one store address and store data per
+    // store.
     MLIRContext *ctx = builder.getContext();
     Type addrType = handshake::ChannelType::getAddrChannel(ctx);
-    Backedge ldAddr = edgeBuilder.get(addrType);
-    Backedge stAddr = edgeBuilder.get(addrType);
-    Backedge stData = edgeBuilder.get(
-        handshake::ChannelType::get(memrefType.getElementType()));
-    inputs.mcInputs.push_back(ldAddr);
-    inputs.mcInputs.push_back(stAddr);
-    inputs.mcInputs.push_back(stData);
+    Type dataType = handshake::ChannelType::get(memrefType.getElementType());
+    std::vector<Backedge> ldAddrs, stAddrs, stDatas;
+    for (unsigned i = 0; i < nLoads; ++i)
+      ldAddrs.push_back(edgeBuilder.get(addrType));
+    for (unsigned i = 0; i < nStores; ++i) {
+      stAddrs.push_back(edgeBuilder.get(addrType));
+      stDatas.push_back(edgeBuilder.get(dataType));
+    }
+    for (Backedge &e : ldAddrs)
+      inputs.mcInputs.push_back(e);
+    for (Backedge &e : stAddrs)
+      inputs.mcInputs.push_back(e);
+    for (Backedge &e : stDatas)
+      inputs.mcInputs.push_back(e);
 
-    // Create the memory controller, adding 1 to its load count so that it
-    // generates a load data result for the LSQ
+    // Create the memory controller, adding nLoads to its load count so that it
+    // generates a load data result for each OU load
     mcOp = builder.create<handshake::MemoryControllerOp>(
         loc, memref, memStart, inputs.mcInputs, ctrlEnd, inputs.mcBlocks,
-        mcNumLoads + 1);
+        mcNumLoads + nLoads);
 
-    // Add the MC's load data result to the LSQ's inputs and create the LSQ,
-    // passing a flag to the builder so that it generates the necessary
-    // outputs that will go to the MC
-    inputs.lsqInputs.push_back(mcOp.getOutputs().back());
-    lsqOp = builder.create<handshake::LSQOp>(loc, mcOp, inputs.lsqInputs,
-                                             inputs.lsqGroupSizes, lsqNumLoads);
+    // Add the MC's load data results to the OU's inputs and create the OU. The
+    // OU produces one load-data result per circuit load port (lsqNumLoads), but
+    // its MC-facing interface only has nLoads load channels and nStores store
+    // channels (one each for an LSQ, one per port for an ordering network).
+    ValueRange mcOutputs = mcOp.getOutputs();
+    for (unsigned i = 0; i < nLoads; ++i)
+      inputs.lsqInputs.push_back(mcOutputs[mcNumLoads + i]);
+    lsqOp = builder.create<handshake::MemOrderingUnitOp>(
+        loc, mcOp, inputs.lsqInputs, inputs.lsqGroupSizes,
+        /*numCircuitLoads=*/lsqNumLoads, /*numMCLoads=*/nLoads,
+        /*numMCStores=*/nStores, orderingKind);
 
-    // Resolve the backedges to fully connect the MC and LSQ
-    ValueRange lsqMemResults = lsqOp.getOutputs().take_back(3);
-    ldAddr.setValue(lsqMemResults[0]);
-    stAddr.setValue(lsqMemResults[1]);
-    stData.setValue(lsqMemResults[2]);
+    // Resolve the backedges to fully connect the MC and OU
+    ValueRange lsqMemResults =
+        lsqOp.getOutputs().take_back(nLoads + 2 * nStores);
+    for (unsigned i = 0; i < nLoads; ++i)
+      ldAddrs[i].setValue(lsqMemResults[i]);
+    for (unsigned i = 0; i < nStores; ++i)
+      stAddrs[i].setValue(lsqMemResults[nLoads + i]);
+    for (unsigned i = 0; i < nStores; ++i)
+      stDatas[i].setValue(lsqMemResults[nLoads + nStores + i]);
   }
 
   // At this point, all load ports are missing their second operand which is the
@@ -209,7 +236,12 @@ MemoryInterfaceBuilder::determineInterfaceInputs(InterfaceInputs &inputs,
     inputs.lsqGroupSizes.push_back(lsqGroupOps.size());
   }
 
-  if (mcPorts.empty())
+  // Ordering networks always connect through a memory controller, so even when
+  // there are no direct MC circuit ports we still need to compute the block
+  // control signals (from LSQ stores) so that instantiateInterfaces creates the
+  // MC+ordering-network pair instead of a standalone ordering network.
+  if (mcPorts.empty() &&
+      orderingKind != handshake::MemOrderingKind::OrderingNetwork)
     return success();
 
   // The MC needs control signals from all blocks containing store ports
@@ -302,14 +334,15 @@ void MemoryInterfaceBuilder::reconnectLoads(InterfacePorts &ports,
 // LSQGenerationInfo
 //===----------------------------------------------------------------------===//
 
-LSQGenerationInfo::LSQGenerationInfo(handshake::LSQOp lsqOp, StringRef name)
+LSQGenerationInfo::LSQGenerationInfo(handshake::MemOrderingUnitOp lsqOp,
+                                     StringRef name)
     : lsqOp(lsqOp), name(name) {
   FuncMemoryPorts lsqPorts = getMemoryPorts(lsqOp);
   fromPorts(lsqPorts);
 }
 
 LSQGenerationInfo::LSQGenerationInfo(FuncMemoryPorts &ports, StringRef name)
-    : lsqOp(cast<handshake::LSQOp>(ports.memOp)), name(name) {
+    : lsqOp(cast<handshake::MemOrderingUnitOp>(ports.memOp)), name(name) {
   fromPorts(ports);
 }
 
@@ -435,4 +468,121 @@ void LSQGenerationInfo::fromPorts(FuncMemoryPorts &ports) {
 
   // Update the index width
   indexWidth = llvm::Log2_64_Ceil(depthLoad);
+}
+
+//===----------------------------------------------------------------------===//
+// QueueConfig / DependencyCheckerConfig
+//===----------------------------------------------------------------------===//
+
+mlir::DictionaryAttr QueueConfig::toAttrDict(mlir::MLIRContext *ctx) const {
+  Builder b(ctx);
+  SmallVector<NamedAttribute> entries = {
+      {b.getStringAttr("QueueType"), b.getStringAttr(qType)},
+      {b.getStringAttr("NumEntries"), b.getUI32IntegerAttr(numEntries)},
+      {b.getStringAttr("DataWidth"), b.getUI32IntegerAttr(dataWidth)},
+      {b.getStringAttr("AddrWidth"), b.getUI32IntegerAttr(addrWidth)},
+      {b.getStringAttr("IDWidth"), b.getUI32IntegerAttr(idWidth)},
+      {b.getStringAttr("IDVal"), b.getUI32IntegerAttr(idVal)},
+      {b.getStringAttr("LDPAddrWidth"), b.getUI32IntegerAttr(ldpAddrWidth)},
+      {b.getStringAttr("StResp"), b.getBoolAttr(stResp)},
+  };
+  return DictionaryAttr::get(ctx, entries);
+}
+
+mlir::DictionaryAttr
+DependencyCheckerConfig::toAttrDict(mlir::MLIRContext *ctx) const {
+  Builder b(ctx);
+  SmallVector<NamedAttribute> entries = {
+      {b.getStringAttr("AccessDisparityWidth"),
+       b.getUI32IntegerAttr(accessDisparityWidth)},
+      {b.getStringAttr("succCanExecuteOnce"),
+       b.getBoolAttr(succCanExecuteOnce)},
+
+  };
+  return DictionaryAttr::get(ctx, entries);
+}
+
+//===----------------------------------------------------------------------===//
+// OrderingNetworkGenerationInfo
+//===----------------------------------------------------------------------===//
+
+OrderingNetworkGenerationInfo::OrderingNetworkGenerationInfo(
+    handshake::MemOrderingUnitOp memoryOrderingUnitOp, StringRef name)
+    : memoryOrderingUnitOp(memoryOrderingUnitOp), name(name) {
+  FuncMemoryPorts ports = getMemoryPorts(memoryOrderingUnitOp);
+  fromPorts(ports);
+}
+
+OrderingNetworkGenerationInfo::OrderingNetworkGenerationInfo(
+    FuncMemoryPorts &ports, StringRef name)
+    : memoryOrderingUnitOp(cast<handshake::MemOrderingUnitOp>(ports.memOp)),
+      name(name) {
+  fromPorts(ports);
+}
+
+void OrderingNetworkGenerationInfo::fromPorts(FuncMemoryPorts &ports) {
+  // TODO: Calculate depth better
+  const unsigned depthLoad = 16;
+  const unsigned depthStore = 16;
+
+  // stResp is always set to false in LSQ generation, however the option exists
+  bool stResp = false;
+
+  // Assign a global port index to each access port (in program order across
+  // all groups) and build the vertex→group mapping. Each access port gets its
+  // own queue config (queues[i] belongs to port i).
+  unsigned globalIdx = 0;
+  DenseMap<StringRef, unsigned> nameToPortIdx;
+
+  for (auto [groupID, groupPorts] : llvm::enumerate(ports.groups)) {
+    for (MemoryPort &accessPort : groupPorts.accessPorts) {
+      portBBIds.push_back(groupID);
+      nameToPortIdx[getUniqueName(accessPort.portOp)] = globalIdx;
+
+      portsToQueue.push_back(globalIdx); // index into queues: per-access config
+
+      if (isa<LoadPort>(accessPort)) {
+        queues.emplace_back("load", depthLoad, ports.dataWidth, ports.addrWidth,
+                            ports.addrWidth, /*idVal=*/0,
+                            llvm::Log2_64_Ceil(depthLoad), false);
+      } else {
+        assert(isa<StorePort>(accessPort) && "port must be load or store");
+        queues.emplace_back("store", depthStore, ports.dataWidth,
+                            ports.addrWidth, ports.addrWidth, /*idVal=*/0,
+                            llvm::Log2_64_Ceil(depthStore), stResp);
+      }
+
+      ++globalIdx;
+    }
+  }
+
+  // Build dependency edges from active MemDependenceAttrs on each access
+  // port.
+  globalIdx = 0;
+  for (GroupMemoryPorts &groupPorts : ports.groups) {
+    for (MemoryPort &accessPort : groupPorts.accessPorts) {
+      if (auto deps =
+              getDialectAttr<MemDependenceArrayAttr>(accessPort.portOp)) {
+        for (MemDependenceAttr dep : deps.getDependencies()) {
+          if (dep.getIsActive()) {
+            auto dstIt = nameToPortIdx.find(dep.getDstAccess());
+            assert(dstIt != nameToPortIdx.end() &&
+                   "dependency destination not found among ports");
+            sources.push_back(globalIdx);
+            destinations.push_back(dstIt->second);
+          }
+        }
+      }
+      ++globalIdx;
+    }
+  }
+
+  for (unsigned i = 0; i < sources.size(); i++) {
+    // if the source is ahead of the destination in program order,
+    // the source is allowed to execute once before waiting on the destination
+    // TODO: 8 is a random access disparity width
+    bool succCanExecuteOnce = sources[i] > destinations[i];
+    edgesToDp.push_back(i);
+    dependencyCheckers.emplace_back(8, succCanExecuteOnce);
+  }
 }

@@ -8,7 +8,7 @@
 //
 // This header declares a couple data-structures and methods to work with
 // Handshake memory interfaces (e.g., `handshake::MemoryControllerOp`,
-// `handshake::LSQOp`).
+// `handshake::MemOrderingUnitOp`).
 //
 //===----------------------------------------------------------------------===//
 
@@ -24,11 +24,11 @@
 namespace dynamatic {
 
 /// Helper class to instantiate appropriate Handshake-level memory interfaces
-/// (handshake::MemoryControllerOp and/or handshake::LSQOp) for a set of memory
-/// accesses. This abstracts away the complexity of determining the kind of
-/// memory interface(s) one needs for a set of memory accesses, the somewhat
-/// convoluted creation of SSA inputs for these interface(s), and the "circuit
-/// rewiring" required to connect accesses to interfaces.
+/// (handshake::MemoryControllerOp and/or handshake::MemOrderingUnitOp) for a
+/// set of memory accesses. This abstracts away the complexity of determining
+/// the kind of memory interface(s) one needs for a set of memory accesses, the
+/// somewhat convoluted creation of SSA inputs for these interface(s), and the
+/// "circuit rewiring" required to connect accesses to interfaces.
 ///
 /// Add memory ports (i.e., load/store-like operations) to the future memory
 /// interfaces using `MemoryInterfaceBuilder::addMCPort` and
@@ -46,9 +46,10 @@ public:
   /// access groups in the interface(s).
   MemoryInterfaceBuilder(handshake::FuncOp funcOp, Value memref, Value memStart,
                          Value ctrlEnd,
-                         const DenseMap<unsigned, Value> &ctrlVals)
+                         const DenseMap<unsigned, Value> &ctrlVals,
+                         handshake::MemOrderingKind orderingKind)
       : funcOp(funcOp), memref(memref), memStart(memStart), ctrlEnd(ctrlEnd),
-        ctrlVals(ctrlVals) {};
+        ctrlVals(ctrlVals), orderingKind(orderingKind) {};
 
   /// Adds an access port to an MC. The operation must be a load or store
   /// access to an MC. The operation must be tagged with the basic block it
@@ -70,14 +71,14 @@ public:
   /// method could not determine memory inputs for the interface(s).
   LogicalResult instantiateInterfaces(OpBuilder &builder,
                                       handshake::MemoryControllerOp &mcOp,
-                                      handshake::LSQOp &lsqOp);
+                                      handshake::MemOrderingUnitOp &lsqOp);
 
   /// Instantiates appropriate memory interfaces for all the ports that were
   /// added to the builder so far using a pattern rewriter. See overload's
   /// documentation for more details.
   LogicalResult instantiateInterfaces(mlir::PatternRewriter &rewriter,
                                       handshake::MemoryControllerOp &mcOp,
-                                      handshake::LSQOp &lsqOp);
+                                      handshake::MemOrderingUnitOp &lsqOp);
 
   /// Returns results of load/store-like operations which are to be given as
   /// operands to a memory interface.
@@ -119,6 +120,9 @@ private:
   /// for connecting the interface(s)'s control ports.
   DenseMap<unsigned, Value> ctrlVals;
 
+  /// Ordering kind to use when instantiating the memory ordering unit.
+  handshake::MemOrderingKind orderingKind;
+
   /// Memory access ports for the MC.
   InterfacePorts mcPorts;
   /// Number of loads to the MC.
@@ -127,6 +131,8 @@ private:
   InterfacePorts lsqPorts;
   /// Number of loads to the LSQ.
   unsigned lsqNumLoads = 0;
+  /// Number of stores to the LSQ.
+  unsigned lsqNumStores = 0;
 
   /// Determines the list of inputs for the memory interface(s) to instantiate
   /// from the sets of recorded ports. This performs no verification of the
@@ -157,14 +163,14 @@ private:
                                       BackedgeBuilder &edgeBuilder,
                                       const FConnectLoad &connect,
                                       handshake::MemoryControllerOp &mcOp,
-                                      handshake::LSQOp &lsqOp);
+                                      handshake::MemOrderingUnitOp &lsqOp);
 };
 
 /// Aggregates LSQ generation information to be passed to the DOT printer under
 /// DOT attribute form or to the Chisel LSQ generator under JSON form.
 struct LSQGenerationInfo {
   /// The LSQ for which generation information is being derived.
-  handshake::LSQOp lsqOp;
+  handshake::MemOrderingUnitOp lsqOp;
   /// The name to give to the RTL module representing the LSQ.
   std::string name;
   /// Signals widths, for data and address buses.
@@ -225,7 +231,7 @@ struct LSQGenerationInfo {
   SmallVector<SmallVector<unsigned>> ldPortIdx, stPortIdx;
 
   /// Derives generation information for the provided LSQ.
-  LSQGenerationInfo(handshake::LSQOp lsqOp, StringRef name = "LSQ");
+  LSQGenerationInfo(handshake::MemOrderingUnitOp lsqOp, StringRef name = "LSQ");
 
   /// Derives generation information for the provided LSQ, passed through its
   /// port information.
@@ -236,6 +242,82 @@ private:
   /// passed through its port information.
   void fromPorts(FuncMemoryPorts &ports);
 };
+/// Configuration for a single load or store queue within the ordering network.
+/// Mirrors the Python QueueConfig in custom_core_gen/configs.py.
+struct QueueConfig {
+  std::string qType; // "load" or "store"
+  unsigned numEntries;
+  unsigned dataWidth;
+  unsigned addrWidth;
+  unsigned idWidth;
+  unsigned idVal;
+  unsigned ldpAddrWidth;
+  bool stResp;
+
+  QueueConfig(std::string qType, unsigned numEntries, unsigned dataWidth,
+              unsigned addrWidth, unsigned idWidth, unsigned idVal,
+              unsigned ldpAddrWidth, bool stResp)
+      : qType(std::move(qType)), numEntries(numEntries), dataWidth(dataWidth),
+        addrWidth(addrWidth), idWidth(idWidth), idVal(idVal),
+        ldpAddrWidth(ldpAddrWidth), stResp(stResp) {}
+
+  /// Converts this config to a DictionaryAttr suitable for use as an MLIR
+  /// attribute or for serialisation alongside other RTL generation parameters.
+  mlir::DictionaryAttr toAttrDict(mlir::MLIRContext *ctx) const;
+};
+
+/// Configuration for a dependency checker, which pairs a load queue and a
+/// store queue.
+struct DependencyCheckerConfig {
+  unsigned accessDisparityWidth;
+  bool succCanExecuteOnce;
+
+  explicit DependencyCheckerConfig(unsigned accessDisparityWidth,
+                                   bool succCanExecuteOnce)
+      : accessDisparityWidth(accessDisparityWidth),
+        succCanExecuteOnce(succCanExecuteOnce) {}
+
+  /// Converts this config to a DictionaryAttr suitable for use as an MLIR
+  /// attribute or for serialisation alongside other RTL generation parameters.
+  mlir::DictionaryAttr toAttrDict(mlir::MLIRContext *ctx) const;
+};
+
+/// Holds all information needed to generate an ordering network RTL module for
+/// a MemOrderingUnitOp. Equivalent to LSQGenerationInfo, but replaces the
+/// group-order arrays (ldOrder, loadOffsets, storeOffsets) with an explicit
+/// dependency graph over the access ports.
+struct OrderingNetworkGenerationInfo {
+  /// The ordering network op for which generation information is being derived.
+  handshake::MemOrderingUnitOp memoryOrderingUnitOp;
+  /// The name to give to the RTL module.
+  std::string name;
+  /// Dependency edges between ports
+  SmallVector<unsigned> sources, destinations, edgesToDp;
+  // maps the port indices to the queue configurations they belong to
+  SmallVector<unsigned> portsToQueue;
+
+  // basic block ID for each port, in program order
+  SmallVector<unsigned> portBBIds;
+
+  // Queue configs
+  SmallVector<QueueConfig> queues;
+
+  // Dependency checker configs
+  SmallVector<DependencyCheckerConfig> dependencyCheckers;
+
+  /// Derives generation information for the provided ordering network op.
+  OrderingNetworkGenerationInfo(
+      handshake::MemOrderingUnitOp memoryOrderingUnitOp,
+      StringRef name = "ordering_network");
+
+  /// Derives generation information from pre-computed port information.
+  OrderingNetworkGenerationInfo(FuncMemoryPorts &ports,
+                                StringRef name = "ordering_network");
+
+private:
+  void fromPorts(FuncMemoryPorts &ports);
+};
+
 } // namespace dynamatic
 
 #endif // DYNAMATIC_DIALECT_HANDSHAKE_MEMORY_INTERFACES_H

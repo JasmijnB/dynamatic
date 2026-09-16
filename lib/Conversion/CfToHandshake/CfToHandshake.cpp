@@ -20,6 +20,7 @@
 #include "dynamatic/Analysis/NameAnalysis.h"
 #include "dynamatic/Dialect/Handshake/HandshakeAttributes.h"
 #include "dynamatic/Dialect/Handshake/HandshakeDialect.h"
+#include "dynamatic/Dialect/Handshake/HandshakeEnums.h"
 #include "dynamatic/Dialect/Handshake/HandshakeInterfaces.h"
 #include "dynamatic/Dialect/Handshake/HandshakeOps.h"
 #include "dynamatic/Dialect/Handshake/HandshakeTypes.h"
@@ -915,7 +916,7 @@ LogicalResult LowerFuncToHandshake::convertMemoryOps(
       if (memAttr.connectsToMC())
         memoryAccessInfo.mcPorts[block].push_back(portOp);
       else
-        memoryAccessInfo.lsqPorts[*memAttr.getLsqGroup()].push_back(portOp);
+        memoryAccessInfo.lsqPorts[*memAttr.getGroup()].push_back(portOp);
     } else /* Case: MemRef is produced by Alloca or GetGlobal */ {
       auto *accessIt = memInfo.find(memref);
       assert(accessIt != memInfo.end() && "unknown memref");
@@ -925,7 +926,7 @@ LogicalResult LowerFuncToHandshake::convertMemoryOps(
       if (memAttr.connectsToMC())
         memoryAccessInfo.mcPorts[block].push_back(portOp);
       else
-        memoryAccessInfo.lsqPorts[*memAttr.getLsqGroup()].push_back(portOp);
+        memoryAccessInfo.lsqPorts[*memAttr.getGroup()].push_back(portOp);
     }
   }
 
@@ -993,7 +994,8 @@ LogicalResult LowerFuncToHandshake::verifyAndCreateMemInterfaces(
     SmallPtrSet<Block *, 4> controlBlocks;
 
     MemoryInterfaceBuilder memBuilder(funcOp, memref, memAccesses.memStart,
-                                      ctrlEnd, ctrlVals);
+                                      ctrlEnd, ctrlVals,
+                                      handshake::MemOrderingKind::LSQ);
 
     // Add MC ports to the interface builder
     for (auto &[_, mcBlockOps] : memAccesses.mcPorts)
@@ -1034,7 +1036,7 @@ LogicalResult LowerFuncToHandshake::verifyAndCreateMemInterfaces(
 
     // Build the memory interfaces
     handshake::MemoryControllerOp mcOp;
-    handshake::LSQOp lsqOp;
+    handshake::MemOrderingUnitOp lsqOp;
     if (failed(memBuilder.instantiateInterfaces(rewriter, mcOp, lsqOp)))
       return failure();
   }

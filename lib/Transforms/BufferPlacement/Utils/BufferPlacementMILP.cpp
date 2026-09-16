@@ -249,13 +249,13 @@ static bool hasVariableLatencyUnit(const DataflowGraphNode &node) {
   Operation *unit = node.op;
   if (auto loadOp = dyn_cast<handshake::LoadOp>(unit)) {
     auto memOp = findMemInterface(loadOp.getAddress());
-    if (isa_and_present<handshake::LSQOp>(memOp))
+    if (isa_and_present<handshake::MemOrderingUnitOp>(memOp))
       return true;
   }
 
   if (auto storeOp = dyn_cast<handshake::StoreOp>(unit)) {
     auto memOp = findMemInterface(storeOp.getAddress());
-    if (isa_and_present<handshake::LSQOp>(memOp))
+    if (isa_and_present<handshake::MemOrderingUnitOp>(memOp))
       return true;
   }
 
@@ -735,7 +735,7 @@ void BufferPlacementMILP::addSteadyStateReachabilityConstraints(CFDFC &cfdfc) {
     /// whether the StoreOp is connected to the LSQ or not.
     if (auto storeOp = dyn_cast<handshake::StoreOp>(dstOp)) {
       auto memOp = findMemInterface(storeOp.getAddressResult());
-      if (isa<handshake::LSQOp>(memOp))
+      if (isa<handshake::MemOrderingUnitOp>(memOp))
         continue;
     }
 

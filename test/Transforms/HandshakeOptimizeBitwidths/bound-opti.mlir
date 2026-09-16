@@ -295,7 +295,7 @@ handshake.func @boundConj(%arg0: !handshake.channel<i32>, %arg2: !handshake.chan
 // CHECK-SAME:                           %[[VAL_1:.*]]: !handshake.channel<i8>,
 // CHECK-SAME:                           %[[VAL_2:.*]]: memref<32xi16>,
 // CHECK-SAME:                           %[[VAL_3:.*]]: !handshake.control<>, ...) -> (!handshake.control<>, !handshake.control<>, !handshake.control<>, !handshake.control<>) attributes {argNames = ["arg0", "arg2", "arg3", "arg6"], resNames = ["out0", "out1", "out2", "out3"]} {
-// CHECK:           %[[VAL_4:.*]]:2 = lsq{{\[}}%[[VAL_2]] : memref<32xi16>] (%[[VAL_3]], %[[VAL_5:.*]], %[[VAL_6:.*]], %[[VAL_7:.*]], %[[VAL_8:.*]], %[[VAL_9:.*]], %[[VAL_10:.*]])  {groupSizes = [1 : i32, 1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i5>, !handshake.channel<i16>, !handshake.control<>, !handshake.channel<i5>, !handshake.control<>) -> (!handshake.channel<i16>, !handshake.control<>)
+// CHECK:           %[[VAL_4:.*]]:2 = lsq{{\[}}%[[VAL_2]] : memref<32xi16>] (%[[VAL_3]], %[[VAL_5:.*]], %[[VAL_6:.*]], %[[VAL_7:.*]], %[[VAL_8:.*]], %[[VAL_9:.*]], %[[VAL_10:.*]])  {groupSizes = [1 : i32, 1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i5>, !handshake.channel<i16>, !handshake.control<>, !handshake.channel<i5>, !handshake.control<>) -> (!handshake.channel<i16>, !handshake.control<>)
 // CHECK:           %[[VAL_11:.*]] = source : <>
 // CHECK:           %[[VAL_12:.*]] = constant %[[VAL_11]] {value = 0 : i8} : <>, <i8>
 // CHECK:           %[[VAL_13:.*]] = cmpi eq, %[[VAL_1]], %[[VAL_12]] : <i8>
@@ -327,7 +327,7 @@ handshake.func @boundConj(%arg0: !handshake.channel<i32>, %arg2: !handshake.chan
 // CHECK:           end %[[VAL_11]], %[[VAL_3]], %[[VAL_3]], %[[VAL_3]] : <>, <>, <>, <>
 // CHECK:         }
 handshake.func @test32(%arg0: !handshake.channel<i16>, %arg1: !handshake.channel<i8>, %arg2: memref<32xi16>, %arg4: !handshake.control<>, ...) -> (!handshake.control<>, !handshake.control<>, !handshake.control<>, !handshake.control<>) attributes {argNames = ["arg0", "arg2", "arg3", "arg6"], resNames = ["out0", "out1", "out2", "out3"]} {
-  %0:2 = lsq[%arg2 : memref<32xi16>] (%arg4, %result, %addressResult, %dataResult, %result_12, %addressResult_14, %falseResult_19)  {groupSizes = [1 : i32, 1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.channel<i16>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i16>, !handshake.control<>)
+  %0:2 = lsq[%arg2 : memref<32xi16>] (%arg4, %result, %addressResult, %dataResult, %result_12, %addressResult_14, %falseResult_19)  {groupSizes = [1 : i32, 1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.channel<i16>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i16>, !handshake.control<>)
   %1 = source : <>
   %2 = constant %1 {value = 0 : i8} : <>, <i8>
   %3 = cmpi eq, %arg1, %2 : <i8>

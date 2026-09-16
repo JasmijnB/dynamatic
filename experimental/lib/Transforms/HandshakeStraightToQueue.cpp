@@ -337,7 +337,7 @@ ensureLazyForkOutputCount(Block *bb, Value input, unsigned numResults,
 
 static void
 connectLSQToForkGraph(handshake::FuncOp &funcOp,
-                      DenseSet<MemoryGroup *> &groups, handshake::LSQOp lsqOp,
+                      DenseSet<MemoryGroup *> &groups, handshake::MemOrderingUnitOp lsqOp,
                       DenseMap<Block *, handshake::LazyForkOp> &sharedForks,
                       DenseMap<Block *, unsigned> &nextAllocPort,
                       PatternRewriter &rewriter) {
@@ -384,7 +384,7 @@ connectLSQToForkGraph(handshake::FuncOp &funcOp,
 
 /// Get all the load and store operations related to a LSQ operation
 static SmallVector<handshake::MemPortOpInterface>
-getLsqOps(handshake::FuncOp &funcOp, handshake::LSQOp lsqOp) {
+getLsqOps(handshake::FuncOp &funcOp, handshake::MemOrderingUnitOp lsqOp) {
   SmallVector<handshake::MemPortOpInterface> lsqOps;
 
   for (auto memOp : funcOp.getOps<handshake::MemPortOpInterface>()) {
@@ -689,7 +689,7 @@ static LogicalResult applyStraightToQueue(handshake::FuncOp funcOp,
   ConversionPatternRewriter rewriter(ctx);
 
   // Return if there are no LSQs in the function
-  if (funcOp.getOps<handshake::LSQOp>().empty()) {
+  if (funcOp.getOps<handshake::MemOrderingUnitOp>().empty()) {
     if (failed(cfg::restoreCfStructure(funcOp, rewriter)))
       return failure();
     return runPostCmergeFtd(funcOp, ctx, /*resolveCondPlaceholders=*/false);
@@ -704,7 +704,8 @@ static LogicalResult applyStraightToQueue(handshake::FuncOp funcOp,
   DenseMap<Block *, unsigned> nextAllocPort;
 
   // For each LSQ
-  for (const handshake::LSQOp lsqOp : funcOp.getOps<handshake::LSQOp>()) {
+  for (const handshake::MemOrderingUnitOp lsqOp :
+       funcOp.getOps<handshake::MemOrderingUnitOp>()) {
 
     // Collect all the operations related to that LSQ
     auto lsqOps = getLsqOps(funcOp, lsqOp);

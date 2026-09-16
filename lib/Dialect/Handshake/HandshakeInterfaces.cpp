@@ -35,27 +35,27 @@ using namespace dynamatic::handshake;
 
 bool MemoryControllerOp::isMasterInterface() { return true; }
 
-bool LSQOp::isMasterInterface() { return !isConnectedToMC(); }
+bool MemOrderingUnitOp::isMasterInterface() { return !isConnectedToMC(); }
 
-TypedValue<MemRefType> LSQOp::getMemRef() {
+TypedValue<MemRefType> MemOrderingUnitOp::getMemRef() {
   if (handshake::MemoryControllerOp mcOp = getConnectedMC())
     return mcOp.getMemRef();
   return cast<TypedValue<MemRefType>>(getInputs().front());
 }
 
-TypedValue<ControlType> LSQOp::getMemStart() {
+TypedValue<ControlType> MemOrderingUnitOp::getMemStart() {
   if (MemoryControllerOp mcOp = getConnectedMC())
     return mcOp.getMemStart();
   return cast<TypedValue<ControlType>>(getOperand(1));
 }
 
-TypedValue<ControlType> LSQOp::getMemEnd() {
+TypedValue<ControlType> MemOrderingUnitOp::getMemEnd() {
   if (MemoryControllerOp mcOp = getConnectedMC())
     return mcOp.getMemStart();
   return cast<TypedValue<ControlType>>(getResults().back());
 }
 
-TypedValue<ControlType> LSQOp::getCtrlEnd() {
+TypedValue<ControlType> MemOrderingUnitOp::getCtrlEnd() {
   if (MemoryControllerOp mcOp = getConnectedMC())
     return mcOp.getCtrlEnd();
   return cast<TypedValue<ControlType>>(getOperands().back());

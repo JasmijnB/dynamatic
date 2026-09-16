@@ -225,7 +225,7 @@ public:
       return false;
     if (auto storeOp = dyn_cast<handshake::StoreOp>(op)) {
       auto memOp = findMemInterface(storeOp.getAddressResult());
-      if (!mlir::isa_and_present<handshake::LSQOp>(memOp))
+      if (!mlir::isa_and_present<handshake::MemOrderingUnitOp>(memOp))
         return true;
     }
 
@@ -376,7 +376,7 @@ public:
 
     if (auto storeOp = dyn_cast<handshake::StoreOp>(op)) {
       auto memOp = findMemInterface(storeOp.getAddressResult());
-      if (!mlir::isa_and_present<handshake::LSQOp>(memOp))
+      if (!mlir::isa_and_present<handshake::MemOrderingUnitOp>(memOp))
         return true;
     }
 

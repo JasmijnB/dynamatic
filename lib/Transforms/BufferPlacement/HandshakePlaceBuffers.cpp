@@ -447,7 +447,7 @@ findBackwardChannelPerCyclicRegion(handshake::FuncOp funcOp) {
       for (OpOperand &use : result.getUses()) {
         Operation *dst = use.getOwner();
 
-        if (isa<handshake::MemoryControllerOp, handshake::LSQOp>(dst))
+        if (isa<handshake::MemoryControllerOp, handshake::MemOrderingUnitOp>(dst))
           continue;
 
         edges.push_back({src, dst, result});

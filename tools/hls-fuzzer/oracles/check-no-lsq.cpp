@@ -33,7 +33,7 @@ int main(int argc, char **argv) {
   OwningOpRef<Operation *> module =
       parseSourceFileForTool(sourceMgr, config, true);
 
-  WalkResult result = module->walk([&](handshake::LSQOp) {
+  WalkResult result = module->walk([&](handshake::MemOrderingUnitOp) {
     llvm::errs() << "IR must not contain an LSQ\n";
     return WalkResult::interrupt();
   });

@@ -146,13 +146,13 @@ handshake.func @doNotEraseSingleInputFork(%start: !handshake.control<>) -> !hand
 
 // CHECK-LABEL:   handshake.func @makeLSQForkLazyDoNothingArg(
 // CHECK-SAME:                                                %[[VAL_0:.*]]: memref<64xi32>, %[[VAL_1:.*]]: !handshake.channel<i32>, %[[VAL_2:.*]]: !handshake.control<>, ...) -> (!handshake.channel<i32>, !handshake.control<>) attributes {argNames = ["memref", "addr", "start"], resNames = ["out0", "out1"]} {
-// CHECK:           %[[VAL_3:.*]]:2 = lsq{{\[}}%[[VAL_0]] : memref<64xi32>] (%[[VAL_4:.*]]#1, %[[VAL_4]]#0, %[[VAL_5:.*]], %[[VAL_4]]#2)  {groupSizes = [1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
+// CHECK:           %[[VAL_3:.*]]:2 = lsq{{\[}}%[[VAL_0]] : memref<64xi32>] (%[[VAL_4:.*]]#1, %[[VAL_4]]#0, %[[VAL_5:.*]], %[[VAL_4]]#2)  {groupSizes = [1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
 // CHECK:           %[[VAL_4]]:3 = fork [3] %[[VAL_2]] : <>
 // CHECK:           %[[VAL_5]], %[[VAL_6:.*]] = load{{\[}}%[[VAL_1]]] %[[VAL_3]]#0 : <i32>, <i32>, <i32>, <i32>
 // CHECK:           end %[[VAL_6]], %[[VAL_3]]#1 : <i32>, <>
 // CHECK:         }
 handshake.func @makeLSQForkLazyDoNothingArg(%memref: memref<64xi32>, %addr: !handshake.channel<i32>, %start: !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>) {
-  %ldData1, %done = lsq [%memref: memref<64xi32>] (%forkCtrl#1, %forkCtrl#0, %ldAddrToMem, %forkCtrl#2) {groupSizes = [1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
+  %ldData1, %done = lsq [%memref: memref<64xi32>] (%forkCtrl#1, %forkCtrl#0, %ldAddrToMem, %forkCtrl#2) {groupSizes = [1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
   %forkCtrl:3 = fork [3] %start : <>
   %ldAddrToMem, %ldDataToSucc = load [%addr] %ldData1 : <i32>, <i32>, <i32>, <i32>
   end %ldDataToSucc, %done : <i32>, <>
@@ -163,14 +163,14 @@ handshake.func @makeLSQForkLazyDoNothingArg(%memref: memref<64xi32>, %addr: !han
 // CHECK-LABEL:   handshake.func @makeLSQForkLazyDoNothingFork(
 // CHECK-SAME:                                                 %[[VAL_0:.*]]: memref<64xi32>,
 // CHECK-SAME:                                                 %[[VAL_1:.*]]: !handshake.control<>, ...) -> (!handshake.channel<i32>, !handshake.control<>) attributes {argNames = ["memref", "start"], resNames = ["out0", "out1"]} {
-// CHECK:           %[[VAL_2:.*]]:2 = lsq{{\[}}%[[VAL_0]] : memref<64xi32>] (%[[VAL_3:.*]]#2, %[[VAL_3]]#0, %[[VAL_4:.*]], %[[VAL_3]]#3)  {groupSizes = [1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
+// CHECK:           %[[VAL_2:.*]]:2 = lsq{{\[}}%[[VAL_0]] : memref<64xi32>] (%[[VAL_3:.*]]#2, %[[VAL_3]]#0, %[[VAL_4:.*]], %[[VAL_3]]#3)  {groupSizes = [1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
 // CHECK:           %[[VAL_3]]:4 = fork [4] %[[VAL_1]] : <>
 // CHECK:           %[[VAL_5:.*]] = constant %[[VAL_3]]#1 {value = 0 : i32} : <>, <i32>
 // CHECK:           %[[VAL_4]], %[[VAL_6:.*]] = load{{\[}}%[[VAL_5]]] %[[VAL_2]]#0 : <i32>, <i32>, <i32>, <i32>
 // CHECK:           end %[[VAL_6]], %[[VAL_2]]#1 : <i32>, <>
 // CHECK:         }
 handshake.func @makeLSQForkLazyDoNothingFork(%memref: memref<64xi32>, %start: !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>) {
-  %ldData1, %done = lsq [%memref: memref<64xi32>] (%forkCtrl#2, %forkCtrl#0, %ldAddrToMem, %forkCtrl#3) {groupSizes = [1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
+  %ldData1, %done = lsq [%memref: memref<64xi32>] (%forkCtrl#2, %forkCtrl#0, %ldAddrToMem, %forkCtrl#3) {groupSizes = [1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
   %forkCtrl:4 = fork [4] %start : <>
   %addr = constant %forkCtrl#1 {value = 0 : i32} : <>, <i32>
   %ldAddrToMem, %ldDataToSucc = load [%addr] %ldData1 : <i32>, <i32>, <i32>, <i32>
@@ -182,7 +182,7 @@ handshake.func @makeLSQForkLazyDoNothingFork(%memref: memref<64xi32>, %start: !h
 // CHECK-LABEL:   handshake.func @makeLSQForkLazyNeedLazyAndEager(
 // CHECK-SAME:                                                    %[[VAL_0:.*]]: memref<64xi32>,
 // CHECK-SAME:                                                    %[[VAL_1:.*]]: !handshake.control<>, ...) -> (!handshake.channel<i32>, !handshake.control<>) attributes {argNames = ["memref", "start"], resNames = ["out0", "out1"]} {
-// CHECK:           %[[VAL_2:.*]]:3 = lsq{{\[}}%[[VAL_0]] : memref<64xi32>] (%[[VAL_3:.*]]#1, %[[VAL_4:.*]]#0, %[[VAL_5:.*]], %[[VAL_6:.*]]#0, %[[VAL_7:.*]], %[[VAL_6]]#2)  {groupSizes = [1 : i32, 1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>)
+// CHECK:           %[[VAL_2:.*]]:3 = lsq{{\[}}%[[VAL_0]] : memref<64xi32>] (%[[VAL_3:.*]]#1, %[[VAL_4:.*]]#0, %[[VAL_5:.*]], %[[VAL_6:.*]]#0, %[[VAL_7:.*]], %[[VAL_6]]#2)  {groupSizes = [1 : i32, 1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>)
 // CHECK:           %[[VAL_4]]:3 = lazy_fork [3] %[[VAL_1]] : <>
 // CHECK:           %[[VAL_3]]:2 = fork [2] %[[VAL_4]]#2 : <>
 // CHECK:           %[[VAL_8:.*]] = constant %[[VAL_3]]#0 {value = 0 : i32} : <>, <i32>
@@ -195,7 +195,7 @@ handshake.func @makeLSQForkLazyDoNothingFork(%memref: memref<64xi32>, %start: !h
 // CHECK:           end %[[VAL_13]], %[[VAL_2]]#2 : <i32>, <>
 // CHECK:         }
 handshake.func @makeLSQForkLazyNeedLazyAndEager(%memref: memref<64xi32>, %start: !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>) {
-  %ldData1, %ldData2, %done = lsq [%memref: memref<64xi32>] (%forkCtrl1#3, %forkCtrl1#0, %ldAddrToMem1, %forkCtrl2#0, %ldAddrToMem2, %forkCtrl2#2) {groupSizes = [1 : i32, 1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>)
+  %ldData1, %ldData2, %done = lsq [%memref: memref<64xi32>] (%forkCtrl1#3, %forkCtrl1#0, %ldAddrToMem1, %forkCtrl2#0, %ldAddrToMem2, %forkCtrl2#2) {groupSizes = [1 : i32, 1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>)
   %forkCtrl1:4 = fork [4] %start : <>
   %addr1 = constant %forkCtrl1#1 {value = 0 : i32} : <>, <i32>
   %ldAddrToMem1, %ldDataToSucc1 = load [%addr1] %ldData1 : <i32>, <i32>, <i32>, <i32>
@@ -210,7 +210,7 @@ handshake.func @makeLSQForkLazyNeedLazyAndEager(%memref: memref<64xi32>, %start:
 // CHECK-LABEL:   handshake.func @makeLSQForkLazyComplex(
 // CHECK-SAME:                                           %[[VAL_0:.*]]: memref<64xi32>,
 // CHECK-SAME:                                           %[[VAL_1:.*]]: !handshake.control<>, ...) -> (!handshake.channel<i32>, !handshake.control<>) attributes {argNames = ["memref", "start"], resNames = ["out0", "out1"]} {
-// CHECK:           %[[VAL_2:.*]]:4 = lsq{{\[}}%[[VAL_0]] : memref<64xi32>] (%[[VAL_3:.*]]#2, %[[VAL_4:.*]]#0, %[[VAL_5:.*]], %[[VAL_6:.*]]#0, %[[VAL_7:.*]], %[[VAL_8:.*]]#0, %[[VAL_9:.*]], %[[VAL_8]]#2)  {groupSizes = [1 : i32, 1 : i32, 1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>)
+// CHECK:           %[[VAL_2:.*]]:4 = lsq{{\[}}%[[VAL_0]] : memref<64xi32>] (%[[VAL_3:.*]]#2, %[[VAL_4:.*]]#0, %[[VAL_5:.*]], %[[VAL_6:.*]]#0, %[[VAL_7:.*]], %[[VAL_8:.*]]#0, %[[VAL_9:.*]], %[[VAL_8]]#2)  {groupSizes = [1 : i32, 1 : i32, 1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>)
 // CHECK:           %[[VAL_10:.*]] = merge %[[VAL_1]], %[[VAL_6]]#1 {handshake.bb = 1 : ui32} : <>
 // CHECK:           %[[VAL_4]]:3 = lazy_fork [3] %[[VAL_10]] {handshake.bb = 1 : ui32} : <>
 // CHECK:           %[[VAL_3]]:3 = fork [3] %[[VAL_4]]#2 {handshake.bb = 1 : ui32} : <>
@@ -229,7 +229,7 @@ handshake.func @makeLSQForkLazyNeedLazyAndEager(%memref: memref<64xi32>, %start:
 // CHECK:           end {handshake.bb = 3 : ui32} %[[VAL_20]], %[[VAL_2]]#3 : <i32>, <>
 // CHECK:         }
 handshake.func @makeLSQForkLazyComplex(%memref: memref<64xi32>, %start: !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>) {
-  %ldData1, %ldData2, %ldData3, %done = lsq [%memref: memref<64xi32>] (%forkCtrl1#4, %forkCtrl1#0, %ldAddrToMem1, %forkCtrl2#0, %ldAddrToMem2, %forkCtrl3#0, %ldAddrToMem3, %forkCtrl3#2) {groupSizes = [1 : i32, 1 : i32, 1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>)
+  %ldData1, %ldData2, %ldData3, %done = lsq [%memref: memref<64xi32>] (%forkCtrl1#4, %forkCtrl1#0, %ldAddrToMem1, %forkCtrl2#0, %ldAddrToMem2, %forkCtrl3#0, %ldAddrToMem3, %forkCtrl3#2) {groupSizes = [1 : i32, 1 : i32, 1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>)
 // ^^bb0
 // ^^bb1 (from ^^bb0, ^bb2, to ^bb2, ^bb3):
   %ctrl1 = merge %start#0, %forkCtrl2#2 {handshake.bb = 1 : ui32} : <>
@@ -259,9 +259,9 @@ handshake.func @makeLSQForkLazyComplex(%memref: memref<64xi32>, %start: !handsha
 // CHECK-SAME:                                             %[[VAL_1:.*]]: !handshake.control<>, ...) -> !handshake.control<> attributes {argNames = ["memref", "start"], resNames = ["out0"]} {
 // CHECK:           %[[VAL_2:.*]]:4 = lazy_fork [4] %[[VAL_1]] : <>
 // CHECK:           %[[VAL_3:.*]]:4 = fork [4] %[[VAL_2]]#3 : <>
-// CHECK:           %[[VAL_4:.*]]:2 = lsq{{\[}}%[[VAL_0]] : memref<64xi32>] (%[[VAL_3]]#3, %[[VAL_2]]#1, %[[VAL_5:.*]], %[[VAL_6:.*]]#1, %[[VAL_7:.*]], %[[VAL_8:.*]], %[[VAL_6]]#2)  {groupSizes = [1 : i32, 1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
+// CHECK:           %[[VAL_4:.*]]:2 = lsq{{\[}}%[[VAL_0]] : memref<64xi32>] (%[[VAL_3]]#3, %[[VAL_2]]#1, %[[VAL_5:.*]], %[[VAL_6:.*]]#1, %[[VAL_7:.*]], %[[VAL_8:.*]], %[[VAL_6]]#2)  {groupSizes = [1 : i32, 1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
 // CHECK:           sink %[[VAL_4]]#1 : <>
-// CHECK:           %[[VAL_9:.*]]:2 = lsq{{\[}}%[[VAL_0]] : memref<64xi32>] (%[[VAL_3]]#2, %[[VAL_2]]#2, %[[VAL_10:.*]], %[[VAL_6]]#3, %[[VAL_11:.*]], %[[VAL_12:.*]], %[[VAL_6]]#4)  {groupSizes = [1 : i32, 1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
+// CHECK:           %[[VAL_9:.*]]:2 = lsq{{\[}}%[[VAL_0]] : memref<64xi32>] (%[[VAL_3]]#2, %[[VAL_2]]#2, %[[VAL_10:.*]], %[[VAL_6]]#3, %[[VAL_11:.*]], %[[VAL_12:.*]], %[[VAL_6]]#4)  {groupSizes = [1 : i32, 1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
 // CHECK:           sink %[[VAL_9]]#1 : <>
 // CHECK:           %[[VAL_13:.*]] = constant %[[VAL_3]]#1 {handshake.bb = 0 : ui32, value = 0 : i32} : <>, <i32>
 // CHECK:           %[[VAL_14:.*]]:2 = fork [2] %[[VAL_13]] {handshake.bb = 0 : ui32} : <i32>
@@ -276,8 +276,8 @@ handshake.func @makeLSQForkLazyComplex(%memref: memref<64xi32>, %start: !handsha
 // CHECK:           end {handshake.bb = 1 : ui32} %[[VAL_6]]#0 : <>
 // CHECK:         }
 handshake.func @makeLSQForkLazyDoubleLSQ(%memref: memref<64xi32>, %start: !handshake.control<>) -> (!handshake.control<>) {
-  %ldData1, %done1 = lsq [%memref: memref<64xi32>] (%start, %start, %ldAddrToMem1, %ctrlTo1, %stAddrToMem1, %stDataToMem1, %ctrlTo1) {groupSizes = [1 : i32, 1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
-  %ldData2, %done2 = lsq [%memref: memref<64xi32>] (%start, %start, %ldAddrToMem2, %ctrlTo1, %stAddrToMem2, %stDataToMem2, %ctrlTo1) {groupSizes = [1 : i32, 1 : i32]} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
+  %ldData1, %done1 = lsq [%memref: memref<64xi32>] (%start, %start, %ldAddrToMem1, %ctrlTo1, %stAddrToMem1, %stDataToMem1, %ctrlTo1) {groupSizes = [1 : i32, 1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
+  %ldData2, %done2 = lsq [%memref: memref<64xi32>] (%start, %start, %ldAddrToMem2, %ctrlTo1, %stAddrToMem2, %stDataToMem2, %ctrlTo1) {groupSizes = [1 : i32, 1 : i32], orderingKind = #handshake<mem_ordering_kind lsq>} : (!handshake.control<>, !handshake.control<>, !handshake.channel<i32>, !handshake.control<>, !handshake.channel<i32>, !handshake.channel<i32>, !handshake.control<>) -> (!handshake.channel<i32>, !handshake.control<>)
 // ^^bb0
   %addr1 = constant %start {value = 0 : i32, handshake.bb = 0 : ui32} : <>, <i32>
   %addr2 = constant %start {value = 1 : i32, handshake.bb = 0 : ui32} : <>, <i32>
