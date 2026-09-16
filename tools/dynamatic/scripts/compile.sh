@@ -26,6 +26,13 @@ ENABLE_SHORT_CIRCUIT=${16}
 ENABLE_DUPLICATION=${17:-0}
 CALCULATE_PATH_DELAYS=${18}
 INSTRUMENT_II=${19}
+USE_ORDERING_NETWORK=${20}
+
+if [[ $USE_ORDERING_NETWORK -ne 0 ]]; then
+  REPLACE_MEM_IFACES="--handshake-replace-memory-interfaces=use-ordering-network=true"
+else
+  REPLACE_MEM_IFACES="--handshake-replace-memory-interfaces"
+fi
 
 LLVM=$DYNAMATIC_DIR/llvm-project
 DYNAMATIC_BINS=$DYNAMATIC_DIR/bin
@@ -83,6 +90,26 @@ export_dot() {
 
   # Export to DOT
   "$DYNAMATIC_EXPORT_DOT_BIN" "$f_handshake" "--edge-style=spline" "--label-type=uname" \
+    > "$f_dot"
+  exit_on_fail "Failed to create $2 DOT" "Created $2 DOT"
+
+  # Convert DOT graph to PNG
+  dot -Tpng "$f_dot" > "$f_png"
+  exit_on_fail "Failed to convert $2 DOT to PNG" "Converted $2 DOT to PNG"
+  return 0
+}
+
+# Exports the memory dependency graph of a Handshake-level IR to DOT using
+# Dynamatic, then converts the DOT to a PNG using dot.
+#   $1: input handshake-level IR filename
+#   $2: output filename, without extension (will use .dot and .png)
+export_mem_dot() {
+  local f_handshake="$1"
+  local f_dot="$COMP_DIR/$2.dot"
+  local f_png="$COMP_DIR/$2.png"
+
+  # Export to DOT
+  "$DYNAMATIC_EXPORT_DOT_BIN" "$f_handshake" "--mem-dep" \
     > "$f_dot"
   exit_on_fail "Failed to create $2 DOT" "Created $2 DOT"
 
@@ -324,7 +351,7 @@ if [[ $STRAIGHT_TO_QUEUE -ne 0 ]]; then
 
   # FPT19 should run before straight to the queue, so that no useless components are instantiated.
   "$DYNAMATIC_OPT_BIN" "$F_HANDSHAKE" \
-    --handshake-deactivate-mem-dependencies --handshake-replace-memory-interfaces \
+    --handshake-deactivate-mem-dependencies $REPLACE_MEM_IFACES \
     --handshake-straight-to-queue \
     --handshake-combine-steering-logic \
     > "$F_HANDSHAKE_SQ"
@@ -345,7 +372,7 @@ else
 
   # handshake transformations
   "$DYNAMATIC_OPT_BIN" "$F_HANDSHAKE" \
-    --handshake-deactivate-mem-dependencies --handshake-replace-memory-interfaces \
+    --handshake-deactivate-mem-dependencies $REPLACE_MEM_IFACES \
     --handshake-remove-unused-memrefs \
     --handshake-optimize-bitwidths \
     --handshake-materialize --handshake-infer-basic-blocks \
@@ -437,6 +464,7 @@ exit_on_fail "Failed to generate handshake_export" "Generated handshake_export"
 
 # Export to DOT
 export_dot "$F_HANDSHAKE_EXPORT" "$KERNEL_NAME"
+export_mem_dot "$F_HANDSHAKE_EXPORT" "${KERNEL_NAME}_mem_dep"
 export_cfg "$F_CF_TRANSFORMED" "${KERNEL_NAME}_CFG"
 
 LOWER_TO_HW_PASS="--lower-handshake-to-hw=instrument-ii=${INSTRUMENT_II:-0}"

@@ -309,6 +309,8 @@ public:
   static constexpr llvm::StringLiteral CALCULATE_PATH_DELAYS =
       "calculate-path-delays";
   static constexpr llvm::StringLiteral INSTRUMENT_II = "instrument-ii";
+  static constexpr llvm::StringLiteral USE_ORDERING_NETWORK =
+      "use-ordering-network";
 
   Compile(FrontendState &state)
       : Command("compile",
@@ -355,6 +357,8 @@ public:
     addFlag({INSTRUMENT_II,
              "Instrument the generated netlist so that each loop reports "
              "the initiation of each of its iterations during simulation"});
+    addFlag({USE_ORDERING_NETWORK,
+             "Use ordering networks instead of LSQs for memory ordering"});
   }
 
   CommandResult execute(CommandArguments &args) override;
@@ -802,13 +806,16 @@ CommandResult Compile::execute(CommandArguments &args) {
   std::string calculatePathDelays =
       args.flags.contains(CALCULATE_PATH_DELAYS) ? "1" : "0";
   std::string instrumentII = args.flags.contains(INSTRUMENT_II) ? "1" : "0";
+  std::string useOrderingNetwork =
+      args.flags.contains(USE_ORDERING_NETWORK) ? "1" : "0";
 
-  return execCmd(
-      script, state.dynamaticPath, state.getKernelDir(), state.getOutputDir(),
-      state.getKernelName(), buffers, floatToString(state.targetCP, 3), sharing,
-      state.fpUnitsGenerator, rigidification, kInduction, disableLSQ,
-      fastTokenDelivery, milpSolver, straightToQueue, speculation,
-      enableShortCircuit, enableDuplication, calculatePathDelays, instrumentII);
+  return execCmd(script, state.dynamaticPath, state.getKernelDir(),
+                 state.getOutputDir(), state.getKernelName(), buffers,
+                 floatToString(state.targetCP, 3), sharing,
+                 state.fpUnitsGenerator, rigidification, kInduction, disableLSQ,
+                 fastTokenDelivery, milpSolver, straightToQueue, speculation,
+                 enableShortCircuit, enableDuplication, calculatePathDelays,
+                 instrumentII, useOrderingNetwork);
 }
 
 CommandResult WriteHDL::execute(CommandArguments &args) {
