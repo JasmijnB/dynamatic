@@ -81,6 +81,9 @@ class Statement:
 class Type(Enum):
     LOGIC = 'logic'
     ARITH = 'arith'
+    # Signed arithmetic: like ARITH but the operands/result are interpreted as
+    # two's-complement (VHDL `signed`, Verilog `signed`/`$signed`).
+    SIGNED = 'signed'
     BOOL = 'bool'
     ANY = 'any'
 

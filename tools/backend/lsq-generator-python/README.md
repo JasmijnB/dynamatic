@@ -119,10 +119,10 @@ Configuration parameters needed for both chisel and Python based LSQ-generator c
     Low-level functions that build the intermediate representation:  
     - `arithmetic.py`: `WrapAdd`, `WrapAddConst`, `WrapSub`
     - `conversions.py`: `VecToArray`, `BitsToOH`, `BitsToOHSub1`, `OHToBits`
-    - `masking.py`: `CyclicPriorityMasking`  
+    - `masking.py`: `CyclicPriorityMasking`, `CyclicRangeFill`
     - `mux.py`: `Mux1H`, `Mux1HROM`, `MuxLookUp`
     - `reduction.py`: `ReduceLogicVec`, `ReduceLogicArray`, `ReduceLogicVecArray`, `Reduce`
-    - `shifts.py`: `RotateLogicVec`, `RotateLogicArray`, `RotateLogicVecArray`, `CyclicLeftShift`
+    - `shifts.py`: `RotateLogicVec`, `RotateLogicArray`, `RotateLogicVecArray`, `CyclicLeftShift`, `CyclicRightShift`
 
   - **core_gen/generators/**  
     High-level modules that build complete entities/architectures:  
@@ -139,3 +139,47 @@ Configuration parameters needed for both chisel and Python based LSQ-generator c
     - `verilog_emitter.py` : `VerilogEmitter`
 
  
+
+---
+
+## Ordering-network generator
+
+The ordering network is an alternative to the monolithic LSQ: instead of one
+queue pair with a central dependency matrix, it builds one queue per memory
+port and one dependency checker per program-order edge between them.
+
+- **ordering-network-generator.py**
+  Runs the tool.
+
+  ```
+  usage: ordering-network-generator.py -o OUTPUT_DIR -c CONFIG_JSON --hdl [vhdl|verilog]
+  ```
+
+  Generates `<name>_core.<suffix>` (the structure, its queues and its
+  dependency checkers) and `<name>.<suffix>` (a wrapper exposing the Dynamatic
+  LSQ interface; ordering networks always connect through a memory controller).
+
+- **custom_core_gen/**
+  - **configs.py**
+    `QueueConfig`, `DependencyCheckerConfig`, `OrderingNetworkConfig`
+    (`OrderingNetworkConfig.from_json` parses the tool's config file).
+
+  - **generators/**
+    - `generator.py` : `Generator` base class — port bookkeeping,
+      `instantiate()`, and the shared Dynamatic master interface.
+    - `queue.py` : `Queue` — a single memory port's address/data queue.
+    - `dependency_checker.py` : `DependencyChecker` — gates a successor port's
+      accesses on the predecessor port's outstanding ones (same-BB counter
+      scheme, cross-BB dep-array scheme, and a forced-sequential variant).
+    - `structure.py` : `Structure` — instantiates the queues and dependency
+      checkers for one config and wires them together.
+
+  - **testbenches/**
+    One directory per testbench, each with a `generate.py`, a config JSON and a
+    SystemVerilog `*_tb.sv`. `test.py` is a pytest suite that runs every
+    `generate.py` and, when Questa/ModelSim is on `PATH`, simulates the
+    generated Verilog and VHDL against the testbench:
+
+    ```
+    PYTHONPATH=. python -m pytest custom_core_gen/testbenches/test.py
+    ```

@@ -133,12 +133,16 @@ class Emitter:
         raise NotImplementedError('Emitter subclasses must implement new()')
 
     def assigned_var_to_str(self, var):
-        from core_gen.signals import Logic
+        from core_gen.signals import Logic, LogicVecArray
 
         size = 1
         if type(var) == tuple:
             if len(var) == 2:
                 str_ret = f'{var[0].getNameWrite(var[1])}'
+                # (LogicVecArray, i) selects a whole vector element, so the
+                # assignment is `size` bits wide, not a single bit.
+                if isinstance(var[0], LogicVecArray):
+                    size = var[0].size
             else:
                 str_ret = f'{var[0].getNameWrite(var[1], var[2])}'
         else:

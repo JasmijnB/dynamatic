@@ -40,8 +40,18 @@ class VerilogEmitter(Emitter):
 
     def add_assignment(self, out, statement: Statement, in_process=False):
         out_str, size = self.assigned_var_to_str(out)
-        meta = Meta(size, Type.LOGIC, -1)
+        # A `signed` target propagates signedness into the right-hand side;
+        # everything else is plain (unsigned) logic.
+        out_type = out.get_type() if isinstance(out, Logic) else Type.LOGIC
+        meta = Meta(size, out_type, -1)
         statement_str = statement.to_str(self, meta)
+        # Verilog makes a whole expression unsigned as soon as one operand is,
+        # so force the result back to signed when the target is signed.
+        if out_type == Type.SIGNED and statement.get_type() not in (
+            Type.SIGNED,
+            Type.ANY,
+        ):
+            statement_str = f'$signed({statement_str})'
         # Inside an always block registers are updated non-blocking, outside of
         # one a continuous assignment is needed instead.
         if in_process:
@@ -152,7 +162,16 @@ class VerilogEmitter(Emitter):
             raise ValueError('Invalid bit value')
 
     def bin_to_str(self, bin: Bin, meta: Meta) -> str:
-        meta = Meta(meta.size, bin.get_param_type(), bin.get_precedence())
+        param_type = bin.get_param_type()
+        # Promote unsigned arithmetic to signed arithmetic when the surrounding
+        # assignment is signed, or when one of the operands already is.
+        if param_type == Type.ARITH and (
+            meta.type == Type.SIGNED
+            or Type.SIGNED in (bin.left.get_type(), bin.right.get_type())
+        ):
+            param_type = Type.SIGNED
+
+        meta = Meta(meta.size, param_type, bin.get_precedence())
         left_str = bin.left.to_str(self, meta)
         right_str = bin.right.to_str(self, meta)
 
@@ -197,27 +216,28 @@ class VerilogEmitter(Emitter):
             )
 
     def logicvec_signal_init(self, vec: LogicVec, sufix: str):
+        signed_str = ' signed' if vec.is_signed else ''
         if vec.type == 'w':
             prefix = 'reg' if vec.force_reg else 'wire'
             self.add_signal_str(
-                f'\t{prefix} [{vec.size-1}:0] {vec.get_base_name(sufix)};\n'
+                f'\t{prefix}{signed_str} [{vec.size-1}:0] {vec.get_base_name(sufix)};\n'
             )
         elif vec.type == 'r':
             self.add_signal_str(
-                f'\twire [{vec.size-1}:0] {vec.get_base_name(sufix)}_d;\n'
+                f'\twire{signed_str} [{vec.size-1}:0] {vec.get_base_name(sufix)}_d;\n'
             )
             self.add_signal_str(
-                f'\treg [{vec.size-1}:0] {vec.get_base_name(sufix)}_q;\n'
+                f'\treg{signed_str} [{vec.size-1}:0] {vec.get_base_name(sufix)}_q;\n'
             )
         elif vec.type == 'i':
             self.add_port_str(',\n')
             self.add_port_str(
-                f'\t\tinput [{vec.size-1}:0] {vec.get_base_name(sufix)}{'_i' if not vec.dyn_comp else ''}'
+                f'\t\tinput{signed_str} [{vec.size-1}:0] {vec.get_base_name(sufix)}{'_i' if not vec.dyn_comp else ''}'
             )
         elif vec.type == 'o':
             self.add_port_str(',\n')
             self.add_port_str(
-                f'\t\toutput [{vec.size-1}:0] {vec.get_base_name(sufix)}{'_o' if not vec.dyn_comp else ''}'
+                f'\t\toutput{signed_str} [{vec.size-1}:0] {vec.get_base_name(sufix)}{'_o' if not vec.dyn_comp else ''}'
             )
 
     def logic_reg_init(self, logic: Logic, enable=None, init=None) -> None:
@@ -263,7 +283,7 @@ class VerilogEmitter(Emitter):
         if init != None:
             self.add_reg_str(f'if ({self.reset_name})')
             self.add_reg_str(
-                f'\t{vec.getNameRead()} <= {self.int_to_str(init, vec.size)};'
+                f'\t{vec.getNameRead()} <= {self.reset_value_str(vec, init)};'
             )
             self.add_reg_str('else begin')
             in_else = True
@@ -323,7 +343,7 @@ class VerilogEmitter(Emitter):
             self.add_reg_str(f'if ({self.reset_name}) begin')
             for i in range(0, array.length):
                 self.add_reg_str(
-                    f'\t{array.getNameRead(i)} <= {self.int_to_str(init[i], array.size)};'
+                    f'\t{array.getNameRead(i)} <= {self.reset_value_str(array, init[i])};'
                 )
             self.add_reg_str('end')
             self.add_reg_str('else begin')
@@ -344,6 +364,13 @@ class VerilogEmitter(Emitter):
             self.add_reg_str('end')
         self.decrease_indent()
 
+    def reset_value_str(self, vec: LogicVec, init: int) -> str:
+        """Reset literal for a vector register; a `signed` one may reset to a
+        negative value, which a sized unsigned literal cannot spell."""
+        if vec.is_signed:
+            return str(init)
+        return self.int_to_str(init, vec.size)
+
     def get_file_suffix(self) -> str:
         return 'v'
 
@@ -356,7 +383,12 @@ class VerilogEmitter(Emitter):
     @staticmethod
     def int_to_str(din: int, size=None, meta=None) -> str:
         # Unlike VHDL, sized Verilog literals are valid in arithmetic contexts
-        # too, so `meta` needs no special casing here.
+        # too, so `meta` needs no special casing for Type.ARITH here. A sized
+        # literal is unsigned though, which would make a whole signed
+        # expression unsigned, so signed contexts use a bare decimal instead.
+        if meta is not None and meta.type == Type.SIGNED:
+            return str(din)
+
         if size == None:
             size = 1
 

@@ -45,10 +45,16 @@ class VHDLEmitter(Emitter):
 
     def add_assignment(self, out, statement: Statement, in_process=False):
         out_str, size = self.assigned_var_to_str(out)
-        meta = Meta(size, Type.LOGIC, -1)
+        # A `signed` target needs signed arithmetic/conversions around the
+        # right-hand side; everything else is plain std_logic(_vector).
+        out_type = out.get_type() if isinstance(out, Logic) else Type.LOGIC
+        meta = Meta(size, out_type, -1)
         statement_str = statement.to_str(self, meta)
-        # Assume we only write to logic types
-        statement_str = self.fix_type(Type.LOGIC, statement.get_type(), statement_str)
+        if not isinstance(statement, WhenElse):
+            # A conditional expression cannot sit inside a type conversion in
+            # VHDL, so when_else_to_str already converted each branch to
+            # `out_type` (passed down through `meta`) individually.
+            statement_str = self.fix_type(out_type, statement.get_type(), statement_str)
         self.statementString += (
             self.get_current_indent() + f'{out_str} <= {statement_str};\n'
         )
@@ -190,7 +196,13 @@ class VHDLEmitter(Emitter):
                 if self.is_surrounded_by_parentheses(child_str)
                 else f'unsigned({child_str})'
             )
-        elif super_type == Type.LOGIC and child_type == Type.ARITH:
+        elif super_type == Type.SIGNED and child_type == Type.LOGIC:
+            return (
+                f'signed{child_str}'
+                if self.is_surrounded_by_parentheses(child_str)
+                else f'signed({child_str})'
+            )
+        elif super_type == Type.LOGIC and child_type in (Type.ARITH, Type.SIGNED):
             return (
                 f'std_logic_vector{child_str}'
                 if self.is_surrounded_by_parentheses(child_str)
@@ -202,12 +214,23 @@ class VHDLEmitter(Emitter):
             return child_str
 
     def bin_to_str(self, bin: Bin, meta: Meta) -> str:
-        meta = Meta(meta.size, bin.get_param_type(), bin.get_precedence())
-        left_str = bin.left.to_str(self, meta)
-        right_str = bin.right.to_str(self, meta)
+        param_type = bin.get_param_type()
+        left_type = bin.left.get_type()
+        right_type = bin.right.get_type()
 
-        left_str = self.fix_type(bin.get_param_type(), bin.left.get_type(), left_str)
-        right_str = self.fix_type(bin.get_param_type(), bin.right.get_type(), right_str)
+        # Promote unsigned arithmetic to signed arithmetic when the surrounding
+        # assignment is signed, or when one of the operands already is.
+        if param_type == Type.ARITH and (
+            meta.type == Type.SIGNED or Type.SIGNED in (left_type, right_type)
+        ):
+            param_type = Type.SIGNED
+
+        child_meta = Meta(meta.size, param_type, bin.get_precedence())
+        left_str = bin.left.to_str(self, child_meta)
+        right_str = bin.right.to_str(self, child_meta)
+
+        left_str = self.fix_type(param_type, left_type, left_str)
+        right_str = self.fix_type(param_type, right_type, right_str)
 
         return f'{left_str} {self.get_binop_str(bin.op)} {right_str}'
 
@@ -236,7 +259,11 @@ class VHDLEmitter(Emitter):
             enter = ' '
             self_precedence = 0
 
-        meta = Meta(meta.size, when_else.get_type(), when_else.get_precedence())
+        # WhenElse.get_type() is LOGIC; a signed assignment context has to be
+        # honoured per-branch instead, since `signed(a when c else b)` is not
+        # legal VHDL.
+        branch_type = Type.SIGNED if meta.type == Type.SIGNED else when_else.get_type()
+        meta = Meta(meta.size, branch_type, when_else.get_precedence())
         true_str = when_else.true_statement.to_str(self, meta)
         false_str = when_else.false_statement.to_str(
             self, Meta(meta.size, meta.type, self_precedence)
@@ -244,10 +271,10 @@ class VHDLEmitter(Emitter):
         cond_str = when_else.condition.to_str(self, meta)
 
         true_str = self.fix_type(
-            when_else.get_type(), when_else.true_statement.get_type(), true_str
+            branch_type, when_else.true_statement.get_type(), true_str
         )
         false_str = self.fix_type(
-            when_else.get_type(), when_else.false_statement.get_type(), false_str
+            branch_type, when_else.false_statement.get_type(), false_str
         )
         cond_str = self.fix_type(Type.BOOL, when_else.condition.get_type(), cond_str)
 
@@ -280,26 +307,31 @@ class VHDLEmitter(Emitter):
             )
 
     def logicvec_signal_init(self, vec: LogicVec, sufix: str):
+        type_str = (
+            f'signed({vec.size-1} downto 0)'
+            if vec.is_signed
+            else f'std_logic_vector({vec.size-1} downto 0)'
+        )
         if vec.type == 'w':
             self.add_signal_str(
-                f'\tsignal {vec.get_base_name(sufix)} : std_logic_vector({vec.size-1} downto 0);\n'
+                f'\tsignal {vec.get_base_name(sufix)} : {type_str};\n'
             )
         elif vec.type == 'r':
             self.add_signal_str(
-                f'\tsignal {vec.get_base_name(sufix)}_d : std_logic_vector({vec.size-1} downto 0);\n'
+                f'\tsignal {vec.get_base_name(sufix)}_d : {type_str};\n'
             )
             self.add_signal_str(
-                f'\tsignal {vec.get_base_name(sufix)}_q : std_logic_vector({vec.size-1} downto 0);\n'
+                f'\tsignal {vec.get_base_name(sufix)}_q : {type_str};\n'
             )
         elif vec.type == 'i':
             self.add_port_str(';\n')
             self.add_port_str(
-                f'\t\t{vec.get_base_name(sufix)}{'_i' if not vec.dyn_comp else ''} : in std_logic_vector({vec.size-1} downto 0)'
+                f'\t\t{vec.get_base_name(sufix)}{'_i' if not vec.dyn_comp else ''} : in {type_str}'
             )
         elif vec.type == 'o':
             self.add_port_str(';\n')
             self.add_port_str(
-                f'\t\t{vec.get_base_name(sufix)}{'_o' if not vec.dyn_comp else ''} : out std_logic_vector({vec.size-1} downto 0)'
+                f'\t\t{vec.get_base_name(sufix)}{'_o' if not vec.dyn_comp else ''} : out {type_str}'
             )
 
     def logic_reg_init(self, logic: Logic, enable=None, init=None) -> None:
@@ -343,7 +375,7 @@ class VHDLEmitter(Emitter):
         if init != None:
             self.add_reg_str(f"\t\tif ({self.reset_name} = '1') then\n")
             self.add_reg_str(
-                f'\t\t\t{vec.getNameRead()} <= {self.int_to_str(init, vec.size)};\n'
+                f'\t\t\t{vec.getNameRead()} <= {self.reset_value_str(vec, init)};\n'
             )
             self.add_reg_str(f'\t\telsif (rising_edge({self.clock_name})) then\n')
         else:
@@ -393,7 +425,7 @@ class VHDLEmitter(Emitter):
             self.add_reg_str(f"\t\tif ({self.reset_name} = '1') then\n")
             for i in range(0, array.length):
                 self.add_reg_str(
-                    f'\t\t\t{array.getNameRead(i)} <= {self.int_to_str(init[i], array.size)};\n'
+                    f'\t\t\t{array.getNameRead(i)} <= {self.reset_value_str(array, init[i])};\n'
                 )
             self.add_reg_str(f'\t\telsif (rising_edge({self.clock_name})) then\n')
         else:
@@ -412,6 +444,13 @@ class VHDLEmitter(Emitter):
                 )
         self.add_reg_str('\t\tend if;\n')
 
+    def reset_value_str(self, vec: LogicVec, init: int) -> str:
+        """Reset literal for a vector register; a `signed` one may reset to a
+        negative value, which has no plain binary-literal spelling."""
+        if vec.is_signed:
+            return f'to_signed({init}, {vec.size})'
+        return self.int_to_str(init, vec.size)
+
     def get_file_suffix(self) -> str:
         return 'vhd'
 
@@ -425,6 +464,9 @@ class VHDLEmitter(Emitter):
     def int_to_str(din: int, size=None, meta=None) -> str:
         if meta is not None and meta.type == Type.ARITH:
             return str(din)
+
+        if meta is not None and meta.type == Type.SIGNED:
+            return f'to_signed({din}, {size})' if size is not None else str(din)
 
         if size == None:
             if din == 1:
