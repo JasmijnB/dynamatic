@@ -208,6 +208,7 @@ class GroupAllocator:
                 f'({name} and std_logic_vector(unsigned({name}) - 1)) '
                 f'= {em.int_to_str(0, self.configs.numGroups)}'
             )
+            assert_expr_verilog = f'({name} & ({name} - 1)) == 0'
 
             # TODO: Add proper emitter support for assertions
             report = 'At most one group allocation request at all times'
@@ -225,7 +226,16 @@ class GroupAllocator:
                     f'\t\t\treport "Assertion failed: {report}"\n'
                     '\t\t\tseverity failure;\n'
                     '\tend if;\n'
-                    'end process;\n'
+                    'end process;\n',
+                    '\n'
+                    f'// Assertion: {report}\n'
+                    '// This is required for correct operation of the group allocator logic\n'
+                    f'always @(posedge {em.clock_name}) begin\n'
+                    f'\tif (!{em.reset_name}) begin\n'
+                    f'\t\tif (!({assert_expr_verilog}))\n'
+                    f'\t\t\t$fatal(1, "Assertion failed: {report}");\n'
+                    '\tend\n'
+                    'end\n',
                 )
             )
 

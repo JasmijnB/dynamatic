@@ -21,7 +21,7 @@ This Python-based LSQ generator generates the LSQ design outlined in Hailin Wang
 ### Sampele usage
 
 ```
-usage: lsq-generator.py [-h] [--output-dir OUTPUT_PATH] --config-file CONFIG_FILES
+usage: lsq-generator.py [-h] [--output-dir OUTPUT_PATH] --config-file CONFIG_FILES [--hdl [vhdl|verilog]]
 ```
 
 ### Sample json configuration file (Example: Histogram)
@@ -64,8 +64,8 @@ usage: lsq-generator.py [-h] [--output-dir OUTPUT_PATH] --config-file CONFIG_FIL
 
 ### Generated Files
 
-- `<lsq_name>.vhd` : A wrapper module that instantiates the core LSQ logic and integrates the required components for memory port interfaces. The new design assumes AXI interfaces.
-- `<lsq_name>_core.vhd`: Contains the core LSQ logic, which is derived from Hailin Wang's master thesis. Minor modifications have been made to the code for integration purposes, but the core logic remains unchanged.
+- `<lsq_name>.vhd` (or `.v` with `--hdl verilog`) : A wrapper module that instantiates the core LSQ logic and integrates the required components for memory port interfaces. The new design assumes AXI interfaces.
+- `<lsq_name>_core.vhd` (or `.v` with `--hdl verilog`): Contains the core LSQ logic, which is derived from Hailin Wang's master thesis. Minor modifications have been made to the code for integration purposes, but the core logic remains unchanged.
 
 ---
 ### Revert to chisel LSQ generator
@@ -136,5 +136,6 @@ Configuration parameters needed for both chisel and Python based LSQ-generator c
     subclass here.  
     - `emitter.py` : abstract base class `Emitter`, plus `Meta`
     - `vhdl_emitter.py` : `VHDLEmitter`
+    - `verilog_emitter.py` : `VerilogEmitter`
 
  

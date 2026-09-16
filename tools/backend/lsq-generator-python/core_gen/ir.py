@@ -231,8 +231,9 @@ class CustomStatement(Statement):
     Represents a custom string statement
     """
 
-    def __init__(self, vhdl_str):
+    def __init__(self, vhdl_str, verilog_str):
         self.vhdl_str = vhdl_str
+        self.verilog_str = verilog_str
 
     def _to_str(self, em: 'Emitter', meta: 'Meta') -> str:
         return em.print_custom_str(self)

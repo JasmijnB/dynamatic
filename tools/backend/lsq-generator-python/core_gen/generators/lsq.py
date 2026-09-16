@@ -254,7 +254,26 @@ class LSQ:
             vhdl_str += '\t' * 2 + "end if;\n"
             vhdl_str += "\tend process;\n\n"
 
-            em.add_custom_statement(CustomStatement(vhdl_str))
+            verilog_str = """
+always @(posedge clk) begin
+    if (rst) begin
+        memStartReady <= 1'b1;
+        memEndValid   <= 1'b0;
+        ctrlEndReady  <= 1'b0;
+    end
+    else begin
+        memStartReady <= (memEndValid && memEnd_ready_i) ||
+                         ((!(memStart_valid_i && memStartReady)) && memStartReady);
+
+        memEndValid   <= TEMP_GEN_MEM || memEndValid;
+
+        ctrlEndReady  <= (!(ctrlEnd_valid_i && ctrlEndReady)) &&
+                         (TEMP_GEN_MEM || ctrlEndReady);
+    end
+end
+"""
+
+            em.add_custom_statement(CustomStatement(vhdl_str, verilog_str))
 
             #! Assign signals for the newly added ports
             em.add_comment('Update new memory interfaces')

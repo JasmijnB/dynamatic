@@ -15,7 +15,7 @@ import sys
 from core_gen.signals import Logic, LogicVec, LogicArray, LogicVecArray
 from core_gen.configs import Configs, GetConfigs
 from core_gen.codegen import codeGen
-from core_gen.emitters import Emitter, VHDLEmitter
+from core_gen.emitters import Emitter, VHDLEmitter, VerilogEmitter
 from core_gen.ir import Val, CustomStatement, Bit
 
 # ===----------------------------------------------------------------------===#
@@ -28,6 +28,7 @@ parser.add_argument("--output-dir", "-o", dest="output_path", default=".", type=
 parser.add_argument(
     "--config-file", "-c", required=True, dest="config_files", default='', type=str
 )
+parser.add_argument("--hdl", "-l", dest="hdl", default="vhdl", type=str)
 
 # Build the target
 args = parser.parse_args()
@@ -358,7 +359,9 @@ class LSQWrapper:
 
         em.add_statement(em.get_reg_init_str())
         em.increase_indent()
-        em.add_custom_statement(CustomStatement("if reset = '1' then"))
+        em.add_custom_statement(
+            CustomStatement("if reset = '1' then", "if (reset) begin")
+        )
         em.increase_indent()
 
         for i in range(self.lsq_config.numLdMem):
@@ -367,7 +370,9 @@ class LSQWrapper:
             em.add_assignment(rresp_id[i], Val(0), in_process=True)
 
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("elsif rising_edge(clock) then"))
+        em.add_custom_statement(
+            CustomStatement("elsif rising_edge(clock) then", "end\nelse begin")
+        )
         em.increase_indent()
 
         for i in range(self.lsq_config.numLdMem):
@@ -376,6 +381,7 @@ class LSQWrapper:
         em.add_custom_statement(
             CustomStatement(
                 f"if {io_loadEn.getNameWrite()} = '1' then",
+                f"if ({io_loadEn.getNameWrite()}) begin",
             )
         )
         em.increase_indent()
@@ -385,18 +391,18 @@ class LSQWrapper:
             em.add_assignment(rresp_id[i], rreq_id[i], in_process=True)
 
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("else"))
+        em.add_custom_statement(CustomStatement("else", "end\nelse begin"))
         em.increase_indent()
 
         for i in range(self.lsq_config.numLdMem):
             em.add_assignment(rresp_valid[i], Bit(0), in_process=True)
 
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("end if;"))
+        em.add_custom_statement(CustomStatement("end if;", "end"))
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("end if;"))
+        em.add_custom_statement(CustomStatement("end if;", "end"))
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("end process;"))
+        em.add_custom_statement(CustomStatement("end process;", "end"))
 
         em.add_comment(
             "--------------------------------------------------------------------------"
@@ -411,7 +417,9 @@ class LSQWrapper:
 
         em.add_statement(em.get_reg_init_str())
         em.increase_indent()
-        em.add_custom_statement(CustomStatement("if reset = '1' then"))
+        em.add_custom_statement(
+            CustomStatement("if reset = '1' then", "if (reset) begin")
+        )
         em.increase_indent()
 
         for i in range(self.lsq_config.numStMem):
@@ -420,7 +428,9 @@ class LSQWrapper:
             em.add_assignment(wresp_id[i], Val(0), in_process=True)
 
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("elsif rising_edge(clock) then"))
+        em.add_custom_statement(
+            CustomStatement("elsif rising_edge(clock) then", "end\nelse begin")
+        )
         em.increase_indent()
 
         for i in range(self.lsq_config.numStMem):
@@ -429,6 +439,7 @@ class LSQWrapper:
         em.add_custom_statement(
             CustomStatement(
                 f"if {io_storeEn.getNameWrite()} = '1' then",
+                f"if ({io_storeEn.getNameWrite()}) begin",
             )
         )
         em.increase_indent()
@@ -438,18 +449,18 @@ class LSQWrapper:
             em.add_assignment(wresp_id[i], rreq_id[i], in_process=True)
 
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("else"))
+        em.add_custom_statement(CustomStatement("else", "end\nelse begin"))
         em.increase_indent()
 
         for i in range(self.lsq_config.numStMem):
             em.add_assignment(wresp_valid[i], Bit(0), in_process=True)
 
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("end if;"))
+        em.add_custom_statement(CustomStatement("end if;", "end"))
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("end if;"))
+        em.add_custom_statement(CustomStatement("end if;", "end"))
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("end process;"))
+        em.add_custom_statement(CustomStatement("end process;", "end"))
 
         ###
         # Instantiate the LSQ_core module
@@ -736,19 +747,24 @@ class LSQWrapper:
         em.add_comment("Process for rresp_id")
         em.add_statement(em.get_reg_init_str())
         em.increase_indent()
-        em.add_custom_statement(CustomStatement("if reset = '1' then"))
+        em.add_custom_statement(
+            CustomStatement("if reset = '1' then", "if (reset) begin")
+        )
         em.increase_indent()
 
         for i in range(self.lsq_config.numLdMem):
             em.add_assignment(rresp_id[i], Val(0), in_process=True)
 
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("elsif rising_edge(clock) then"))
+        em.add_custom_statement(
+            CustomStatement("elsif rising_edge(clock) then", "end\nelse begin")
+        )
         em.increase_indent()
 
         em.add_custom_statement(
             CustomStatement(
                 f"if {io_loadEn.getNameWrite()} = '1' then",
+                f"if ({io_loadEn.getNameWrite()}) begin",
             )
         )
         em.increase_indent()
@@ -757,11 +773,11 @@ class LSQWrapper:
             em.add_assignment(rresp_id[i], rreq_id[i], in_process=True)
 
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("end if;"))
+        em.add_custom_statement(CustomStatement("end if;", "end"))
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("end if;"))
+        em.add_custom_statement(CustomStatement("end if;", "end"))
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("end process;"))
+        em.add_custom_statement(CustomStatement("end process;", "end"))
 
         em.add_comment(
             "--------------------------------------------------------------------------"
@@ -775,7 +791,9 @@ class LSQWrapper:
         em.add_comment("Process for wreq_ready, wresp_valid and wresp_id")
         em.add_statement(em.get_reg_init_str())
         em.increase_indent()
-        em.add_custom_statement(CustomStatement("if reset = '1' then"))
+        em.add_custom_statement(
+            CustomStatement("if reset = '1' then", "if (reset) begin")
+        )
         em.increase_indent()
 
         for i in range(self.lsq_config.numStMem):
@@ -783,7 +801,9 @@ class LSQWrapper:
             em.add_assignment(wresp_id[i], Val(0), in_process=True)
 
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("elsif rising_edge(clock) then"))
+        em.add_custom_statement(
+            CustomStatement("elsif rising_edge(clock) then", "end\nelse begin")
+        )
         em.increase_indent()
 
         em.add_comment(
@@ -796,6 +816,8 @@ class LSQWrapper:
             CustomStatement(
                 f"if {io_storeEn.getNameWrite()} = '1' "
                 f"and {io_stAddrToMC_ready.getNameRead()} = '1' then",
+                f"if ({io_storeEn.getNameWrite()} "
+                f"&& {io_stAddrToMC_ready.getNameRead()}) begin",
             )
         )
         em.increase_indent()
@@ -805,18 +827,18 @@ class LSQWrapper:
             em.add_assignment(wresp_id[i], rreq_id[i], in_process=True)
 
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("else"))
+        em.add_custom_statement(CustomStatement("else", "end\nelse begin"))
         em.increase_indent()
 
         for i in range(self.lsq_config.numStMem):
             em.add_assignment(wresp_valid[i], Bit(0), in_process=True)
 
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("end if;"))
+        em.add_custom_statement(CustomStatement("end if;", "end"))
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("end if;"))
+        em.add_custom_statement(CustomStatement("end if;", "end"))
         em.decrease_indent()
-        em.add_custom_statement(CustomStatement("end process;"))
+        em.add_custom_statement(CustomStatement("end process;", "end"))
 
         ###
         # Signal Assignment
@@ -904,7 +926,12 @@ def main():
     if not os.path.exists(args.output_path):
         os.makedirs(args.output_path)
 
-    emitter = VHDLEmitter()
+    if args.hdl == "vhdl":
+        emitter = VHDLEmitter()
+    elif args.hdl == "verilog":
+        emitter = VerilogEmitter()
+    else:
+        raise ValueError("Unsupported HDL specified. Use 'vhdl' or 'verilog'.")
 
     # Parse the config file
     lsqConfig = GetConfigs(args.config_files)
