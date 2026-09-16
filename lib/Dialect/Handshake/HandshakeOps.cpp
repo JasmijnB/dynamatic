@@ -1335,11 +1335,17 @@ static LogicalResult getLSQPorts(LSQPorts &lsqPorts) {
   // unaccounted. Register the store-only MC interface port explicitly here.
   // (handleMC handles every case where at least one load is present.)
   if (lsqPorts.interfacePorts.empty() && !lsqPorts.memOp.isMasterInterface()) {
+    // Unlike `handleMC`, which recovers the MC by back-tracking an operand,
+    // there is no MC-driven operand here, so the MC can only be reached through
+    // the users of our results. That lookup is not robust during conversion:
+    // `getPorts()` is called lazily from `getOperandName`/`getResultName` while
+    // lowering to HW, by which point the MC may already have been replaced by
+    // its `hw::InstanceOp`. A null MC is therefore not an error here -- the
+    // port layout below is fully determined by the result count, and
+    // `isMasterInterface()` (which only inspects operand types) has already
+    // established that we are a slave. Callers needing the MC operation itself
+    // only do so before lowering, while this lookup still succeeds.
     handshake::MemoryControllerOp mcOp = lsqPorts.getLSQOp().getConnectedMC();
-    if (!mcOp)
-      return lsqPorts.memOp->emitError()
-             << "LSQ is a slave interface but its memory controller could not "
-                "be identified.";
     // Remaining results are [stAddr_0..stAddr_{M-1}, stData_0..stData_{M-1}].
     unsigned remaining = memResults.size() - resIdx;
     if (remaining % 2 != 0)
