@@ -500,6 +500,37 @@ static LogicalResult convertUndefinedValues(ConversionPatternRewriter &rewriter,
   return success();
 }
 
+/// Returns whether `val`, possibly through a chain of unrealized conversion
+/// casts, provides the initial-value input of a GSA MU gate. FTD lowers a loop
+/// header phi to `mux init(<backedge condition>) [<initial>, <backedge>]`. The
+/// `init` op is a buffer holding a token at reset, so the gate selects
+/// <initial> on loop entry and re-selects it on every later `false` of the
+/// condition -- including the `false` that exits the loop, which re-arms the
+/// gate for a future entry. An always-available source-triggered constant would
+/// therefore restart the loop on its own, letting the header free-run with no
+/// control token backing it, so such a constant must be driven by the control
+/// network instead.
+static bool feedsMuGateInitialInput(Value val) {
+  std::function<bool(Value)> reaches = [&](Value v) -> bool {
+    for (Operation *user : v.getUsers()) {
+      if (isa<UnrealizedConversionCastOp>(user)) {
+        if (llvm::any_of(user->getResults(),
+                         [&](Value res) { return reaches(res); }))
+          return true;
+        continue;
+      }
+      auto muxOp = dyn_cast<handshake::MuxOp>(user);
+      if (!muxOp || !muxOp->hasAttr(FTD_EXPLICIT_MU))
+        continue;
+      ValueRange dataOperands = muxOp.getDataOperands();
+      if (!dataOperands.empty() && dataOperands.front() == v)
+        return true;
+    }
+    return false;
+  };
+  return reaches(val);
+}
+
 /// Determines whether it is possible to transform an arith-level constant into
 /// a Handshake-level constant that is triggered by an always-triggering source
 /// component without compromising the circuit semantics (e.g., without
@@ -517,6 +548,11 @@ static bool isCstSourcable(arith::ConstantOp cstOp) {
     return !isa<handshake::BranchOp, handshake::ConditionalBranchOp,
                 handshake::LoadOp, handshake::StoreOp>(user);
   };
+
+  // A constant feeding a MU gate's initial value must go through the control
+  // network, so that the gate cannot re-arm itself after the loop exits.
+  if (feedsMuGateInitialInput(cstOp.getResult()))
+    return false;
 
   return llvm::all_of(cstOp->getUsers(), isValidUser);
 }
