@@ -828,10 +828,21 @@ class DependencyChecker(Generator):
         # successor BB execution is itself a "new head from empty".
         awaiting_head = Logic(em, "sq_awaiting_head", "r")
         deferred_announce = Logic(em, "sq_deferred_announce", "w")
-        em.add_assignment(deferred_announce, awaiting_head & sq_bb_executed)
+        # `send_into_empty` is included directly, not just through the
+        # register: when the push that repopulates the queue lands in the SAME
+        # cycle as the send that drains it, the pushed entry is the new head
+        # right now. Waiting for the registered `awaiting_head` would defer its
+        # announce to the NEXT push, leaving it to become head, issue its
+        # access with no boundary claimed, and be granted with the conflict
+        # check masked off.
+        em.add_assignment(
+            deferred_announce, (awaiting_head | send_into_empty) & sq_bb_executed
+        )
+        # The announce consumes the pending state, so it must win over a
+        # simultaneous send-into-empty rather than the other way round.
         em.add_assignment(
             awaiting_head,
-            Bit(1).when(send_into_empty).else_(Bit(0).when(deferred_announce).else_(awaiting_head)),
+            Bit(0).when(deferred_announce).else_(Bit(1).when(send_into_empty).else_(awaiting_head)),
         )
         awaiting_head.regInit(init=1)
 
