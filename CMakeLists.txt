@@ -67,6 +67,12 @@ endif()
 # MLIR/LLVM configuration
 #-------------------------------------------------------------------------------
 
+# Emit debug info in separate .dwo files (Debug/RelWithDebInfo only), which
+# greatly reduces link times and memory usage. Applies to both LLVM (when built
+# in-tree) and Dynamatic, since both go through HandleLLVMOptions.
+option(LLVM_USE_SPLIT_DWARF
+  "Use -gsplit-dwarf when compiling llvm and --gdb-index when linking." ON)
+
 option(DYNAMATIC_BUILD_LLVM "Build LLVM as part of the Dynamatic build" OFF)
 if (DYNAMATIC_BUILD_LLVM)
   set(LLVM_ENABLE_PROJECTS "mlir;clang;polly" CACHE STRING "" FORCE)
