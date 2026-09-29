@@ -17,6 +17,12 @@ DC_TO_PQ_MAP = {
     "pq_done_i": "done_ptr_o",
     "pq_done_en_i": "done_en_o",
     "pq_length_i": "length_o",
+    "pq_pending_done_i": "pending_done_o",
+    "pq_alloc_end_oh_i": "alloc_end_oh_o",
+    "pq_alloc_full_i": "alloc_full_o",
+    # Shared dep-array pointers (physical cross-BB; Queue._shared_dep_state).
+    "pq_dep_head_i": "done_full_o",
+    "pq_dep_tail_i": "bb_tail_o",
     "allow_pq_access_o": "allow_access_i",
 }
 
@@ -24,6 +30,8 @@ DC_TO_PQ_MAP = {
 DC_TO_SQ_MAP = {
     "sq_head_i": "queue_head_o",
     "sq_access_en_i": "access_en_o",
+    "sq_dep_head_i": "head_full_o",
+    "sq_dep_tail_i": "bb_tail_o",
     "allow_sq_access_o": "allow_access_i",
 }
 
@@ -31,8 +39,21 @@ DC_TO_SQ_MAP = {
 CROSS_BB_DC_PORTS = {"pq_bb_valid_i", "pq_bb_ready_o", "sq_bb_valid_i", "sq_bb_ready_o"}
 
 
+# Queue ports driven by the structure itself rather than a checker or the IO.
+STRUCTURE_QUEUE_PORTS = {"bb_exec_i"}
+
+# Checker/queue ports that only exist on some defs (physical cross-BB sharing,
+# end-of-allocation marker), so the representative-def checks must not
+# require them.
+OPTIONAL_DC_PORTS = {"pq_done_i", "pq_pending_done_i", "pq_alloc_end_oh_i",
+                     "pq_alloc_full_i", "pq_dep_head_i", "pq_dep_tail_i",
+                     "sq_dep_head_i", "sq_dep_tail_i"}
+OPTIONAL_QUEUE_PORTS = {"done_ptr_o", "done_full_o", "head_full_o", "bb_tail_o"}
+
+
 def get_global_queue_ports(queue_def):
-    dc_ports = set(DC_TO_SQ_MAP.values()) | set(DC_TO_PQ_MAP.values())
+    dc_ports = (set(DC_TO_SQ_MAP.values()) | set(DC_TO_PQ_MAP.values())
+                | STRUCTURE_QUEUE_PORTS)
     # Keep the queue's own port order: this drives the order in which the
     # structure declares its IO, and iterating a set of strings would make
     # generation nondeterministic across processes.
@@ -160,12 +181,21 @@ class Structure(Generator):
         pred_ports = set(config.edge_src)
         succ_ports = set(config.edge_dst)
 
+
+        # Ports of a cross-BB checker share their dep-array pointer state
+        # through their queue (see Queue._shared_dep_state).
+        cross_bb_ports = set()
+        for a, b in zip(config.edge_src, config.edge_dst):
+            if config.port_bb_ids[a] != config.port_bb_ids[b]:
+                cross_bb_ports |= {a, b}
+
         # One Queue def per port instance; is_pred/is_succ are set from the graph
         queue_defs = {}  # port_idx -> Queue
         for port_idx, queue_config_idx in enumerate(config.ports_to_queue):
             q_config = copy(config.queues[queue_config_idx])
             q_config.is_pred = port_idx in pred_ports
             q_config.is_succ = port_idx in succ_ports
+            q_config.shares_dep_state = port_idx in cross_bb_ports
             q_def = Queue(
                 name=f"{self.name}_queue_{port_idx}", suffix="", configs=q_config
             )
@@ -175,7 +205,7 @@ class Structure(Generator):
         # One DependencyChecker def per unique module shape. The queue pair alone
         # is not enough: cross-BB vs same-BB edges produce different ports and
         # logic (see DependencyChecker.generate's crosses_bb branch), and
-        # succ_can_execute_once / access_disparity_width / forced_sequential change
+        # succ_can_execute_once / access_disparity_width change
         # the body too. Edges that differ in any of these must get distinct defs,
         # otherwise a shared def's port list won't match what _route_bb_ports wires
         # per instance (e.g. a same-BB instance reusing a cross-BB def has no
@@ -195,7 +225,6 @@ class Structure(Generator):
                 crosses_bb,
                 dc_config.succ_can_execute_once,
                 dc_config.access_disparity_width,
-                dc_config.forced_sequential,
             )
             edge_to_dc_key[edge_idx] = key
             if key not in dc_def_map:
@@ -228,8 +257,10 @@ class Structure(Generator):
         # other mapped port always exists, so the representative-def checks
         # below stay meaningful for them regardless of which def/config is
         # picked as the representative.
-        pq_keys_req = pq_keys - {"pq_done_i"}
-        pq_vals_req = pq_vals - {"done_ptr_o"}
+        pq_keys_req = pq_keys - OPTIONAL_DC_PORTS
+        pq_vals_req = pq_vals - OPTIONAL_QUEUE_PORTS
+        sq_keys_req = sq_keys - OPTIONAL_DC_PORTS
+        sq_vals_req = sq_vals - OPTIONAL_QUEUE_PORTS
 
         assert (
             pq_keys_req <= dc_ports
@@ -238,11 +269,11 @@ class Structure(Generator):
             pq_vals_req <= pq_ports
         ), f"DC_TO_PQ_MAP values not in pred ports:  {pq_vals_req - pq_ports}"
         assert (
-            sq_keys <= dc_ports
-        ), f"DC_TO_SQ_MAP keys not in DC ports:      {sq_keys - dc_ports}"
+            sq_keys_req <= dc_ports
+        ), f"DC_TO_SQ_MAP keys not in DC ports:      {sq_keys_req - dc_ports}"
         assert (
-            sq_vals <= sq_ports
-        ), f"DC_TO_SQ_MAP values not in succ ports:  {sq_vals - sq_ports}"
+            sq_vals_req <= sq_ports
+        ), f"DC_TO_SQ_MAP values not in succ ports:  {sq_vals_req - sq_ports}"
         assert dc_ports <= (pq_keys | sq_keys | CROSS_BB_DC_PORTS), \
             f"DC ports not fully mapped: {dc_ports - (pq_keys | sq_keys | CROSS_BB_DC_PORTS)}"
 
@@ -332,7 +363,7 @@ class Structure(Generator):
             dp_checker.init_port_vars(em)
             dp_checkers.append(dp_checker)
 
-        self._route_bb_ports(em, dp_checkers)
+        self._route_bb_ports(em, dp_checkers, queue_instances, config.port_bb_ids)
 
         defaults = {}
         defaults["allow_alloc_i"] = Logic(em, "allow_alloc_default", "w")
@@ -347,13 +378,14 @@ class Structure(Generator):
 
         self._write_to_file(em, out_path, out_file)
 
-    def _route_bb_ports(self, em: Emitter, dp_checkers: list) -> None:
+    def _route_bb_ports(self, em: Emitter, dp_checkers: list,
+                        queue_instances: dict = None, port_bb_ids: list = None) -> None:
         """Create structure-level BB handshake ports and wire them to cross-BB DCs.
 
         For each distinct BB ID that appears in a cross-BB DC, one bb_valid_{x}
         input and bb_ready_{x} output are added to the structure module.
-        The valid forwarded to each DC is gated by all *other* DCs' ready signals
-        for the same BB so that all DCs record the execution atomically.
+        Every DC on a BB records its execution atomically: they all see the
+        same bb_exec = bb_valid & (AND of every DC's ready on that BB).
         """
         bb_to_dc_ports = defaultdict(list)  # bb_id -> [(dp_checker, prefix)]
         for dp_checker in dp_checkers:
@@ -373,16 +405,25 @@ class Structure(Generator):
             bb_ready = Logic(em, f"bb_ready_{bb_id}", "o")
             all_readies = [dc_ready_wires[(id(dp), pfx)] for dp, pfx in pairs]
 
-            em.add_assignment(bb_ready, reduce(lambda x, y: x & y, all_readies))
+            bb_ready_all = Logic(em, f"bb_ready_all_{bb_id}", "w")
+            em.add_assignment(bb_ready_all, reduce(lambda x, y: x & y, all_readies))
+            em.add_assignment(bb_ready, bb_ready_all)
 
-            for i, (dp_checker, prefix) in enumerate(pairs):
-                others = [all_readies[j] for j in range(len(pairs)) if j != i]
-                if others:
-                    masked = Logic(em, f"bb_{bb_id}_{prefix}_{dp_checker.pred.num}_{dp_checker.succ.num}_valid", "w")
-                    factor = bb_valid
-                    for w in others:
-                        factor = factor & w
-                    em.add_assignment(masked, factor)
-                    dp_checker.port_vars[f"{prefix}_bb_valid_i"] = masked
-                else:
-                    dp_checker.port_vars[f"{prefix}_bb_valid_i"] = bb_valid
+            # The BB executes when every checker on it can record it. Every
+            # checker gets that one signal as its valid: its own
+            # `valid & ready` is then exactly bb_exec, since its ready is one
+            # of the terms of bb_ready_all. (Previously each checker got
+            # bb_valid ANDed with all OTHER checkers' readies, the same
+            # function built separately per checker: k(k-1) AND inputs for k
+            # checker sides on a BB.)
+            bb_exec = Logic(em, f"bb_exec_{bb_id}", "w")
+            em.add_assignment(bb_exec, bb_valid & bb_ready_all)
+            for dp_checker, prefix in pairs:
+                dp_checker.port_vars[f"{prefix}_bb_valid_i"] = bb_exec
+
+            # ... and advances the shared dep-array tail of each sharing queue.
+            if queue_instances is not None:
+                for port_idx, q_inst in queue_instances.items():
+                    if (port_bb_ids[port_idx] == bb_id
+                            and q_inst.q_def.configs.shares_dep_state):
+                        q_inst.port_vars["bb_exec_i"] = [bb_exec]

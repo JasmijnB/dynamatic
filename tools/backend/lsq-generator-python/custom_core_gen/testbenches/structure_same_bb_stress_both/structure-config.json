@@ -1,0 +1,56 @@
+{
+  "name": "structure_same_bb_stress_both",
+  "edgeSrc": [
+    0,
+    1
+  ],
+  "edgeDst": [
+    1,
+    0
+  ],
+  "edgeDp": [
+    0,
+    1
+  ],
+  "stResp": 0,
+  "portBBIds": [
+    0,
+    0
+  ],
+  "portsToQueue": [
+    0,
+    1
+  ],
+  "queues": [
+    {
+      "QueueType": "load",
+      "NumEntries": 4,
+      "DataWidth": 32,
+      "AddrWidth": 8,
+      "IDWidth": 2,
+      "IDVal": 0,
+      "LDPAddrWidth": 0,
+      "StResp": false
+    },
+    {
+      "QueueType": "store",
+      "NumEntries": 4,
+      "DataWidth": 32,
+      "AddrWidth": 8,
+      "IDWidth": 2,
+      "IDVal": 0,
+      "LDPAddrWidth": 0,
+      "StResp": false
+    }
+  ],
+  "dependencyCheckers": [
+    {
+      "AccessDisparityWidth": 8,
+      "succCanExecuteOnce": false
+    },
+    {
+      "AccessDisparityWidth": 8,
+      "succCanExecuteOnce": true
+    }
+  ]
+}

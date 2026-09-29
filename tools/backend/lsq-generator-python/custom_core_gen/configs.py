@@ -14,6 +14,10 @@ class QueueConfig:
     bypass: bool = False
     is_succ = False
     is_pred = False
+    # Set by the structure when this port takes part in a cross-BB dependency
+    # checker (physical frame): the queue then owns the dep-array tail that
+    # every such checker of this port shares (see Queue._shared_dep_state).
+    shares_dep_state: bool = False
 
     def __init__(self, config: dict):
         self.q_type = config["QueueType"]
@@ -28,15 +32,14 @@ class QueueConfig:
         self.q_addr_width = math.ceil(math.log2(self.num_entries))
         self.is_succ = False
         self.is_pred = False
+        self.shares_dep_state = False
 
         assert self.q_type in [
             "load",
             "store",
         ], "QueueType must be either 'load' or 'store'"
         assert self.num_entries > 0, "NumEntries must be greater than 0"
-        assert (
-            self.num_entries & (self.num_entries - 1)
-        ) == 0, f"NumEntries must be a power of 2, got {self.num_entries}"
+        # Any NumEntries >= 1 (see generators/ptr_utils.py for the pointers).
         assert self.data_width > 0, "DataWidth must be greater than 0"
         assert self.addr_width > 0, "AddrWidth must be greater than 0"
         assert self.id_width > 0, "IDWidth must be greater than 0"
@@ -59,10 +62,6 @@ class DependencyCheckerConfig:
         False  # Whether this dependency checker checks for dependencies in reverse order
     )
     access_disparity_width: int = 4
-    forced_sequential: bool = (
-        False  # Never compare addresses: grant a successor access only once every
-        # predecessor access preceding it in program order has completed
-    )
 
     def __init__(
         self, config: dict, pq: "QueueConfig" = None, sq: "QueueConfig" = None, pq_bb: int = None, sq_bb: int = None
@@ -74,7 +73,6 @@ class DependencyCheckerConfig:
         self.succ_can_execute_once = config.get("succCanExecuteOnce")
         self.access_disparity_width = config.get("AccessDisparityWidth")
         self.dep_entry_ratio = config.get("depEntryRatio", 1)
-        self.forced_sequential = config.get("forcedSequential", False)
 
     @staticmethod
     def from_parts(
@@ -86,7 +84,6 @@ class DependencyCheckerConfig:
         obj.access_disparity_width = dc_config.get("AccessDisparityWidth")
         obj.succ_can_execute_once = dc_config.get("succCanExecuteOnce")
         obj.dep_entry_ratio = dc_config.get("depEntryRatio", 1)
-        obj.forced_sequential = dc_config.get("forcedSequential", False)
         return obj
 
 
