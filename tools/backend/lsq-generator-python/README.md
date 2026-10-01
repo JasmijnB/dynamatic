@@ -170,7 +170,9 @@ port and one dependency checker per program-order edge between them.
     - `queue.py` : `Queue` — a single memory port's address/data queue.
     - `dependency_checker.py` : `DependencyChecker` — gates a successor port's
       accesses on the predecessor port's outstanding ones (same-BB counter
-      scheme and cross-BB dep-array scheme).
+      scheme, cross-BB dep-array scheme, and a forced-sequential mode that
+      waits for every earlier predecessor access instead of comparing
+      addresses: `forcedSequential` per checker, or `ON_FORCED_SEQUENTIAL=1`).
     - `structure.py` : `Structure` — instantiates the queues and dependency
       checkers for one config and wires them together.
 

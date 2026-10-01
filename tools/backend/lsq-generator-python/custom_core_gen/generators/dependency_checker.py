@@ -2,18 +2,23 @@
 predecessor access preceding them in program order has completed or is known
 to target a different address.
 
-Both schemes produce the same three things, combined in `generate`:
-  - `check_mask`: the physical predecessor slots the head successor's address
-    must be compared against,
-  - `no_dep_pending`: the head successor has no pending predecessor left,
-  - scheme-specific extra grant conditions.
+Both schemes come in two halves, combined in `generate`:
+  - the disparity (`_*_disparity`): the state tracking how far the successor
+    runs ahead of the predecessor, and from it `no_dep_pending`: the head
+    successor has no pending predecessor left;
+  - the window (`_*_window`), built on that state: `check_mask`, the physical
+    predecessor slots the head successor's address must be compared against,
+    plus scheme-specific extra grant conditions.
+The forced-sequential mode (`forcedSequential`) builds the disparity only and
+grants the head successor on `no_dep_pending` alone, without comparing
+addresses: it waits for every predecessor access preceding it in program order.
 
-Same BB (`_same_bb_check`): the order of the two accesses is static, so a
+Same BB (`_same_bb_*`): the order of the two accesses is static, so a
 signed up/down counter, the access disparity AD (+1 per successor access, -1
 per predecessor completion), is the head-relative index of the last
 predecessor entry the head successor must check (AD < 0: nothing pending).
 
-Different BBs (`_cross_bb_check`): the interleaving is dynamic and arrives as
+Different BBs (`_cross_bb_*`): the interleaving is dynamic and arrives as
 BB-execution handshakes. The first successor execution after a predecessor
 run marks the most recent predecessor entry as its boundary (predecessor dep
 array: WHERE) and stamps the successor entry dependent (successor dep array:
@@ -50,6 +55,15 @@ def _bits(em: Emitter, vec, n: int, bit) -> None:
     """vec[i] = bit(i) for every i < n."""
     for i in range(n):
         em.add_assignment((vec, i), bit(i))
+
+
+@dataclass
+class _Disparity:
+    no_dep_pending: object
+    ad: object = None              # same BB: the access-disparity counter
+    ad_oh: object = None           # cross BB: the boundary of the head successor
+    boundary_valid: object = None  # cross BB: ad_oh is a pending boundary
+    pq: object = None              # cross BB: the predecessor dep array
 
 
 @dataclass
@@ -119,31 +133,46 @@ class DependencyChecker(Generator):
 
         self._dep_arrays = None  # set by `_build_dep_arrays` (cross-BB only)
         if crosses_bb:
-            check_mask, no_dep_pending, conditions = self._cross_bb_check(
-                em, pq_done_en_i, sq_access_en_i)
+            disparity = self._cross_bb_disparity(em, pq_done_en_i, sq_access_en_i)
         else:
-            check_mask, no_dep_pending, conditions = self._same_bb_check(
-                em, pq_done_i, pq_done_en_i, sq_access_en_i, pq_length_i)
-
-        # A conflict: a pending (masked) predecessor entry with the head
-        # successor's address.
-        conflict = Logic(em, "conflict", "w")
-        conflicts = LogicVec(em, "conflicts", "w", n_pq)
-        _bits(em, conflicts, n_pq, lambda i: Val(check_mask, i).when(
-            Val(pq_addr_i, i) == sq_head).else_(Bit(0)))
-        Reduce(em, conflict, conflicts, BinOp.OR)
-
-        em.add_comment(
-            "Allow the successor access if:\n"
-            "\t- the scheme-specific conditions hold (the head successor's\n"
-            "\t  dependency window is allocated in the predecessor queue)\n"
-            "\t- AND its address conflicts with no pending predecessor entry\n"
-            "\t  (trivially true when nothing is pending anymore)\n"
-        )
+            disparity = self._same_bb_disparity(em, pq_done_en_i, sq_access_en_i)
+        no_dep_pending = disparity.no_dep_pending
         allow_pq, extra_sq = self._bb_execution_gates()
+
+        if c.forced_sequential:
+            # The address ports (pq_addr, sq_head, pq_length, the allocation
+            # marker) stay, unused, so the structure wires every checker alike.
+            em.add_comment(
+                "Forced sequential: allow the successor access only once every\n"
+                "\tpredecessor access preceding it in program order has completed\n"
+                "\t(no address comparison)\n"
+            )
+            grant = extra_sq + [no_dep_pending]
+        else:
+            if crosses_bb:
+                check_mask, conditions = self._cross_bb_window(em, disparity)
+            else:
+                check_mask, conditions = self._same_bb_window(
+                    em, disparity, pq_done_i, pq_length_i)
+
+            # A conflict: a pending (masked) predecessor entry with the head
+            # successor's address.
+            conflict = Logic(em, "conflict", "w")
+            conflicts = LogicVec(em, "conflicts", "w", n_pq)
+            _bits(em, conflicts, n_pq, lambda i: Val(check_mask, i).when(
+                Val(pq_addr_i, i) == sq_head).else_(Bit(0)))
+            Reduce(em, conflict, conflicts, BinOp.OR)
+
+            em.add_comment(
+                "Allow the successor access if:\n"
+                "\t- the scheme-specific conditions hold (the head successor's\n"
+                "\t  dependency window is allocated in the predecessor queue)\n"
+                "\t- AND its address conflicts with no pending predecessor entry\n"
+                "\t  (trivially true when nothing is pending anymore)\n"
+            )
+            grant = conditions + extra_sq + [~conflict | no_dep_pending]
         em.add_assignment(allow_pq_access_o, allow_pq)
-        em.add_assignment(allow_sq_access_o, reduce(
-            lambda a, b: a & b, conditions + extra_sq + [~conflict | no_dep_pending]))
+        em.add_assignment(allow_sq_access_o, reduce(lambda a, b: a & b, grant))
         self._write_to_file(em, path_rtl, out_file)
 
     def _bb_execution_gates(self):
@@ -176,13 +205,22 @@ class DependencyChecker(Generator):
     # Same-BB scheme
     # ===--------------------------------------------------------------------===
 
-    def _same_bb_check(self, em: Emitter, pq_done_i, pq_done_en_i, sq_access_en_i,
-                       pq_length_i):
+    def _same_bb_disparity(self, em: Emitter, pq_done_en_i, sq_access_en_i) -> _Disparity:
+        """AD < 0: every predecessor access before the head successor is done.
+        In forced-sequential mode the grant keeps AD <= 0, so neither the
+        window's allocation gate nor its overflow cap is needed."""
+        ad = self._ad_counter(em, self.configs.access_disparity_width,
+                              sq_access_en_i, pq_done_en_i)
+        no_dep_pending = Logic(em, "no_dep_pending", "w")
+        em.add_assignment(no_dep_pending, ad < Val(0, size=self.configs.access_disparity_width))
+        return _Disparity(no_dep_pending, ad=ad)
+
+    def _same_bb_window(self, em: Emitter, disparity: _Disparity, pq_done_i, pq_length_i):
         """The window is the predecessor slots at head-relative index 0..AD."""
         n_pq = self.configs.pq.num_entries
         n = self.configs.pq.q_addr_width
         ad_width = self.configs.access_disparity_width
-        ad = self._ad_counter(em, ad_width, sq_access_en_i, pq_done_en_i)
+        ad, no_dep_pending = disparity.ad, disparity.no_dep_pending
 
         # Wide enough to hold AD in full and n_pq as a POSITIVE signed number,
         # so AD, slot indices and the queue length compare without wrapping.
@@ -191,9 +229,6 @@ class DependencyChecker(Generator):
         # pq_length is non-negative: zero-extension keeps its value.
         pq_length_cmp = LogicVec(em, "pq_length_cmp", "w", cmp_width, is_signed=True)
         em.add_assignment(pq_length_cmp, Val(0, cmp_width - n - 1).concat(pq_length_i))
-
-        no_dep_pending = Logic(em, "no_dep_pending", "w")
-        em.add_assignment(no_dep_pending, ad < Val(0, size=ad_width))
 
         # check_mask[j] = AD >= 0 and (j - pq_done) mod n_pq <= min(AD, n_pq - 1)
         # Computed per slot from pq_done and a saturated AD (a LUT or two per
@@ -247,7 +282,7 @@ class DependencyChecker(Generator):
             ad_not_maxed = Logic(em, "ad_not_maxed", "w")
             em.add_assignment(ad_not_maxed, ad < Val(max_ad, size=ad_width))
             conditions.append(ad_not_maxed)
-        return check_mask, no_dep_pending, conditions
+        return check_mask, conditions
 
     def _ad_counter(self, em: Emitter, ad_width, sq_access_en, pq_done_en):
         """The access disparity, plus the predecessor-retire underflow guard.
@@ -298,7 +333,7 @@ class DependencyChecker(Generator):
     # Cross-BB scheme
     # ===--------------------------------------------------------------------===
 
-    def _cross_bb_check(self, em: Emitter, pq_done_en, sq_access_en):
+    def _cross_bb_disparity(self, em: Emitter, pq_done_en, sq_access_en) -> _Disparity:
         """State: predecessor marks (WHERE to jump), successor dependent bits
         (WHEN to jump), and `ad_oh` + `boundary_valid`, the boundary of the
         successor at the head. `boundary_valid` survives an early
@@ -315,7 +350,12 @@ class DependencyChecker(Generator):
 
         A marked predecessor completion while no boundary is resolved
         satisfies the oldest queued dependent successor before it reaches the
-        head: its bit is cleared in place (satisfaction clear)."""
+        head: its bit is cleared in place (satisfaction clear).
+
+        No boundary pending (~boundary_valid): every predecessor access before
+        the head successor is done, as predecessors complete in order. In
+        forced-sequential mode no successor is granted while a boundary is
+        pending, so `boundary_valid` never outlives a grant."""
         n_pq = self.configs.pq.num_entries
         n_sq = self.configs.sq.num_entries
         pq, sq, sq_bb_executed, sq_write_value, sq_clear_bits = (
@@ -395,7 +435,14 @@ class DependencyChecker(Generator):
         em.add_assignment(boundary_valid, Bit(1).when(jump).else_(
             Bit(0).when(consume).else_(boundary_valid)))
         boundary_valid.regInit(init=0)
+        no_dep_pending = Logic(em, "no_dep_pending", "w")
+        em.add_assignment(no_dep_pending, ~boundary_valid)
+        return _Disparity(no_dep_pending, ad_oh=ad_oh, boundary_valid=boundary_valid, pq=pq)
 
+    def _cross_bb_window(self, em: Emitter, disparity: _Disparity):
+        """The window is [head, ad_oh] while a boundary is pending."""
+        n_pq = self.configs.pq.num_entries
+        ad_oh, boundary_valid, pq = disparity.ad_oh, disparity.boundary_valid, disparity.pq
         # Window [head, ad_oh]. The allocated slots run from the head up to
         # the end-of-allocation marker, so the boundary is unallocated exactly
         # when the marker lies in the window, unless the queue is full (the
@@ -405,15 +452,13 @@ class DependencyChecker(Generator):
         CyclicRangeFill(em, span, ad_oh, pq.head_oh)
         check_mask = LogicVec(em, "check_mask", "w", n_pq)
         _bits(em, check_mask, n_pq, lambda i: Val(span, i).when(boundary_valid).else_(Bit(0)))
-        no_dep_pending = Logic(em, "no_dep_pending", "w")
-        em.add_assignment(no_dep_pending, ~boundary_valid)
         end_bits = LogicVec(em, "ad_end_in_window_bits", "w", n_pq)
         _bits(em, end_bits, n_pq, lambda i: Val(span, i) & Val(self._pq_alloc_end_oh_i, i))
         end_in_window = Logic(em, "ad_end_in_window", "w")
         Reduce(em, end_in_window, end_bits, BinOp.OR)
         allocated = Logic(em, "corresponding_entry_allocated", "w")
         em.add_assignment(allocated, ~boundary_valid | self._pq_alloc_full_i | ~end_in_window)
-        return check_mask, no_dep_pending, [allocated]
+        return check_mask, [allocated]
 
     def _make_bb_ports(self, em: Emitter, prefix: str, ready):
         valid_i = self._add_port(Logic(em, f"{prefix}_bb_valid", "i"))
@@ -430,7 +475,7 @@ class DependencyChecker(Generator):
         n_pq = self.configs.pq.num_entries
         n_sq = self.configs.sq.num_entries
         sq_write_value = Logic(em, "sq_write_value", "w")
-        # Driven by `_cross_bb_check`'s satisfaction clear.
+        # Driven by `_cross_bb_disparity`'s satisfaction clear.
         sq_clear_bits = LogicVec(em, "sq_clear_bits", "w", n_sq)
         # Successor array first: its BB execution marks the predecessor array.
         sq = self._succ_dep_array(em, n_sq, sq_access_en, sq_write_value, sq_clear_bits)
