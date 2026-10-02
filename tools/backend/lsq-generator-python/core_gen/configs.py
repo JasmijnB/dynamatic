@@ -65,6 +65,10 @@ class Configs:
     stResp:        bool = False     # Whether store response channel in store access port is enabled
     gaMulti:       bool = False     # Whether multiple groups are allowed to request an allocation at the same cycle
     bypass:        bool = True      # Whether bypassing (store-to-load forwarding) is enabled
+    stDataPass:     bool = False     # Keep store data in the access port and forward it to memory
+                                    # straight from the port (no store-data array, needs bypass off)
+    ldDataPass:    bool = False     # Pass returned load data straight to its access port (one
+                                    # holding register per port, no load-data array, bypass off)
 
     def __init__(self, config: dict) -> None:
         self.name = config["name"]
@@ -83,6 +87,14 @@ class Configs:
         self.stResp = bool(config["stResp"])
         self.gaMulti = bool(config["groupMulti"])
         self.bypass = bool(config["bypassEn"])
+        self.stDataPass = bool(config.get("storeDataPassthrough", 0))
+        # (A store-only LSQ has no load data to pass through.)
+        self.ldDataPass = (bool(config.get("loadDataPassthrough", 0))
+                           and self.numLdPorts > 0)
+        assert not (self.ldDataPass and self.bypass), \
+            "loadDataPassthrough keeps no load data in the queue to bypass into"
+        assert not (self.stDataPass and self.bypass), \
+            "storeDataPassthrough keeps no store data in the queue, so it cannot bypass"
 
         self.gaNumLoads = config["numLoads"]
         self.gaNumStores = config["numStores"]

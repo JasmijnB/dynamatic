@@ -462,6 +462,17 @@ class LSQWrapper:
         em.decrease_indent()
         em.add_custom_statement(CustomStatement("end process;", "end"))
 
+        if self.lsq_config.stDataPass:
+            # The core hands out the store address and the store data on separate
+            # channels; a BRAM write needs both in the same cycle, so join them.
+            st_addr_valid = Logic(em, "st_addr_valid", 'w', dyn_comp=True)
+            st_data_valid = Logic(em, "st_data_valid", 'w', dyn_comp=True)
+            st_addr_ready = Logic(em, "st_addr_ready", 'w', dyn_comp=True)
+            st_data_ready = Logic(em, "st_data_ready", 'w', dyn_comp=True)
+            em.add_assignment(io_storeEn, st_addr_valid & st_data_valid)
+            em.add_assignment(st_addr_ready, wreq_ready[0] & st_data_valid)
+            em.add_assignment(st_data_ready, wreq_ready[0] & st_addr_valid)
+
         ###
         # Instantiate the LSQ_core module
         ###
@@ -474,7 +485,12 @@ class LSQWrapper:
         em.add_map("empty_o")
         em.add_map("wreq_data_0_o", io_storeData.getNameWrite())
         em.add_map("wreq_addr_0_o", io_storeAddr.getNameWrite())
-        em.add_map("wreq_valid_0_o", io_storeEn.getNameWrite())
+        if self.lsq_config.stDataPass:
+            em.add_map("wreq_valid_0_o", st_addr_valid.getNameWrite())
+            em.add_map("wreq_data_valid_0_o", st_data_valid.getNameWrite())
+            em.add_map("wreq_data_ready_0_i", st_data_ready.getNameRead())
+        else:
+            em.add_map("wreq_valid_0_o", io_storeEn.getNameWrite())
 
         em.add_map("rresp_data_0_i", io_loadData.getNameRead())
         em.add_map("rreq_addr_0_o", io_loadAddr.getNameWrite())
@@ -516,7 +532,10 @@ class LSQWrapper:
             em.add_map(f"rreq_id_0_o", rreq_id[i].getNameWrite())
 
         for i in range(self.lsq_config.numStMem):
-            em.add_map(f"wreq_ready_{i}_i", wreq_ready[i].getNameRead())
+            if self.lsq_config.stDataPass:
+                em.add_map(f"wreq_ready_{i}_i", st_addr_ready.getNameRead())
+            else:
+                em.add_map(f"wreq_ready_{i}_i", wreq_ready[i].getNameRead())
             em.add_map(f"wresp_valid_{i}_i", wresp_valid[i].getNameRead())
             em.add_map(f"wresp_ready_{i}_o")
             em.add_map(f"wresp_id_{i}_i", wresp_id[i].getNameRead())
@@ -846,8 +865,12 @@ class LSQWrapper:
         em.add_comment("Signal Assignment")
         em.add_assignment(io_ldAddrToMC_valid, io_loadEn)
         em.add_assignment(io_stAddrToMC_valid, io_storeEn)
-        em.add_assignment(io_stDataToMC_valid, io_storeEn)
-        em.add_assignment(wreq_ready[0], io_stAddrToMC_ready & io_stDataToMC_ready)
+        if self.lsq_config.stDataPass:
+            # Address and data go to the MC on their own channels.
+            em.add_assignment(wreq_ready[0], io_stAddrToMC_ready)
+        else:
+            em.add_assignment(io_stDataToMC_valid, io_storeEn)
+            em.add_assignment(wreq_ready[0], io_stAddrToMC_ready & io_stDataToMC_ready)
 
         ###
         # Instantiate the LSQ_core module
@@ -861,6 +884,9 @@ class LSQWrapper:
         em.add_map("wreq_data_0_o", io_storeData.getNameWrite())
         em.add_map("wreq_addr_0_o", io_storeAddr.getNameWrite())
         em.add_map("wreq_valid_0_o", io_storeEn.getNameWrite())
+        if self.lsq_config.stDataPass:
+            em.add_map("wreq_data_valid_0_o", io_stDataToMC_valid.getNameWrite())
+            em.add_map("wreq_data_ready_0_i", io_stDataToMC_ready.getNameRead())
 
         em.add_map("rresp_data_0_i", io_loadData.getNameRead())
         em.add_map("rreq_addr_0_o", io_loadAddr.getNameWrite())

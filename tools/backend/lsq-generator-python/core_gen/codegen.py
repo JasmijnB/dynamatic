@@ -38,16 +38,18 @@ def codeGen(emitter: Emitter, path_rtl, configs):
         lsq_submodules.ptq_dispatcher_lda = ptq_dispatcher_lda
 
         # Load Data Port Dispatcher
-        qtp_dispatcher_ldd = dispatchers.QueueToPortDispatcher(
-            name,
-            '_ldd',
-            configs.numLdPorts,
-            configs.numLdqEntries,
-            configs.dataW,
-            configs.ldpAddrW,
-        )
-        qtp_dispatcher_ldd.generate(emitter.new(), path_rtl)
-        lsq_submodules.qtp_dispatcher_ldd = qtp_dispatcher_ldd
+        # With loadDataPassthrough the load data goes straight to the port.
+        if not configs.ldDataPass:
+            qtp_dispatcher_ldd = dispatchers.QueueToPortDispatcher(
+                name,
+                '_ldd',
+                configs.numLdPorts,
+                configs.numLdqEntries,
+                configs.dataW,
+                configs.ldpAddrW,
+            )
+            qtp_dispatcher_ldd.generate(emitter.new(), path_rtl)
+            lsq_submodules.qtp_dispatcher_ldd = qtp_dispatcher_ldd
 
     # Store Address Port Dispatcher
     ptq_dispatcher_sta = dispatchers.PortToQueueDispatcher(
@@ -62,16 +64,18 @@ def codeGen(emitter: Emitter, path_rtl, configs):
     lsq_submodules.ptq_dispatcher_sta = ptq_dispatcher_sta
 
     # Store Data Port Dispatcher
-    ptq_dispatcher_std = dispatchers.PortToQueueDispatcher(
-        name,
-        '_std',
-        configs.numStPorts,
-        configs.numStqEntries,
-        configs.dataW,
-        configs.stpAddrW,
-    )
-    ptq_dispatcher_std.generate(emitter.new(), path_rtl)
-    lsq_submodules.ptq_dispatcher_std = ptq_dispatcher_std
+    # With storeDataPassthrough the store data stays in its access port: no dispatcher.
+    if not configs.stDataPass:
+        ptq_dispatcher_std = dispatchers.PortToQueueDispatcher(
+            name,
+            '_std',
+            configs.numStPorts,
+            configs.numStqEntries,
+            configs.dataW,
+            configs.stpAddrW,
+        )
+        ptq_dispatcher_std.generate(emitter.new(), path_rtl)
+        lsq_submodules.ptq_dispatcher_std = ptq_dispatcher_std
 
     # Store Backward Port Dispatcher
     if configs.stResp:

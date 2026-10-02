@@ -179,6 +179,15 @@ class LSQ:
         wreq_data_o = LogicVecArray(
             em, 'wreq_data', 'o', self.configs.numStMem, self.configs.dataW
         )
+        if self.configs.stDataPass:
+            # The store data gets its own handshake towards memory: it is taken
+            # straight from the access port, independently of the address.
+            wreq_data_valid_o = LogicArray(
+                em, 'wreq_data_valid', 'o', self.configs.numStMem
+            )
+            wreq_data_ready_i = LogicArray(
+                em, 'wreq_data_ready', 'i', self.configs.numStMem
+            )
 
         wresp_valid_i = LogicArray(em, 'wresp_valid', 'i', self.configs.numStMem)
         wresp_ready_o = LogicArray(em, 'wresp_ready', 'o', self.configs.numStMem)
@@ -304,9 +313,10 @@ end
         ldq_data_valid = LogicArray(
             em, 'ldq_data_valid', 'r', self.configs.numLdqEntries
         )
-        ldq_data = LogicVecArray(
-            em, 'ldq_data', 'r', self.configs.numLdqEntries, self.configs.dataW
-        )
+        if not self.configs.ldDataPass:
+            ldq_data = LogicVecArray(
+                em, 'ldq_data', 'r', self.configs.numLdqEntries, self.configs.dataW
+            )
 
         # Store Queue Entries
         stq_alloc = LogicArray(em, 'stq_alloc', 'r', self.configs.numStqEntries)
@@ -328,12 +338,13 @@ end
         stq_addr = LogicVecArray(
             em, 'stq_addr', 'r', self.configs.numStqEntries, self.configs.addrW
         )
-        stq_data_valid = LogicArray(
-            em, 'stq_data_valid', 'r', self.configs.numStqEntries
-        )
-        stq_data = LogicVecArray(
-            em, 'stq_data', 'r', self.configs.numStqEntries, self.configs.dataW
-        )
+        if not self.configs.stDataPass:
+            stq_data_valid = LogicArray(
+                em, 'stq_data_valid', 'r', self.configs.numStqEntries
+            )
+            stq_data = LogicVecArray(
+                em, 'stq_data', 'r', self.configs.numStqEntries, self.configs.dataW
+            )
 
         # Order for load-store
         store_is_older = LogicVecArray(
@@ -360,7 +371,10 @@ end
         ldq_reset = LogicArray(em, 'ldq_reset', 'w', self.configs.numLdqEntries)
         stq_wen = LogicArray(em, 'stq_wen', 'w', self.configs.numStqEntries)
         stq_addr_wen = LogicArray(em, 'stq_addr_wen', 'w', self.configs.numStqEntries)
-        stq_data_wen = LogicArray(em, 'stq_data_wen', 'w', self.configs.numStqEntries)
+        if not self.configs.stDataPass:
+            stq_data_wen = LogicArray(
+                em, 'stq_data_wen', 'w', self.configs.numStqEntries
+            )
         stq_reset = LogicArray(em, 'stq_reset', 'w', self.configs.numStqEntries)
         # From Read/Write Block
         ldq_data_wen = LogicArray(em, 'ldq_data_wen', 'w', self.configs.numLdqEntries)
@@ -440,9 +454,11 @@ end
             em.add_assignment(
                 stq_addr_valid[i], ~stq_wen[i] & (stq_addr_wen[i] | stq_addr_valid[i])
             )
-            em.add_assignment(
-                stq_data_valid[i], ~stq_wen[i] & (stq_data_wen[i] | stq_data_valid[i])
-            )
+            if not self.configs.stDataPass:
+                em.add_assignment(
+                    stq_data_valid[i],
+                    ~stq_wen[i] & (stq_data_wen[i] | stq_data_valid[i]),
+                )
 
         # order matrix
         # store_is_older(i,j) = (not stq_reset(j) and (stq_alloc(j) or ga_ls_order(i, j)))
@@ -522,7 +538,8 @@ end
         ldq_addr_valid.regInit()
         ldq_addr.regInit(ldq_addr_wen)
         ldq_data_valid.regInit()
-        ldq_data.regInit(ldq_data_wen)
+        if not self.configs.ldDataPass:
+            ldq_data.regInit(ldq_data_wen)
 
         # Store Queue Entries
         stq_alloc.regInit(init=[0] * self.configs.numStqEntries)
@@ -532,8 +549,9 @@ end
             stq_port_idx.regInit(stq_wen)
         stq_addr_valid.regInit()
         stq_addr.regInit(stq_addr_wen)
-        stq_data_valid.regInit()
-        stq_data.regInit(stq_data_wen)
+        if not self.configs.stDataPass:
+            stq_data_valid.regInit()
+            stq_data.regInit(stq_data_wen)
 
         # Order for load-store
         store_is_older.regInit()
@@ -594,7 +612,7 @@ end
         # In this case, do not instantiate dispatching logic when there are zero load ports.
         # - WARNING: This logic needs more testing
         # - TODO: Also remove the load queue when there are zero load ports.
-        if lsq_submodules.qtp_dispatcher_ldd != None:
+        if lsq_submodules.qtp_dispatcher_ldd != None and not self.configs.ldDataPass:
             # Load Data Port Dispatcher
             lsq_submodules.qtp_dispatcher_ldd.instantiate(
                 em,
@@ -624,18 +642,19 @@ end
         )
 
         # Store Data Port Dispatcher
-        lsq_submodules.ptq_dispatcher_std.instantiate(
-            em,
-            stp_data_i,
-            stp_data_valid_i,
-            stp_data_ready_o,
-            stq_alloc,
-            stq_data_valid,
-            stq_port_idx,
-            stq_data,
-            stq_data_wen,
-            stq_head_oh,
-        )
+        if not self.configs.stDataPass:
+            lsq_submodules.ptq_dispatcher_std.instantiate(
+                em,
+                stp_data_i,
+                stp_data_valid_i,
+                stp_data_ready_o,
+                stq_alloc,
+                stq_data_valid,
+                stq_port_idx,
+                stq_data,
+                stq_data_wen,
+                stq_head_oh,
+            )
 
         # Store Backward Port Dispatcher
         if self.configs.stResp:
@@ -703,9 +722,10 @@ end
         stq_addr_valid_pcomp = LogicArray(
             em, 'stq_addr_valid_pcomp', pipe_comp_type, self.configs.numStqEntries
         )
-        stq_data_valid_pcomp = LogicArray(
-            em, 'stq_data_valid_pcomp', pipe_comp_type, self.configs.numStqEntries
-        )
+        if not self.configs.stDataPass:
+            stq_data_valid_pcomp = LogicArray(
+                em, 'stq_data_valid_pcomp', pipe_comp_type, self.configs.numStqEntries
+            )
         stq_tail_update_pcomp = Logic(em, 'stq_tail_update_pcomp', pipe_comp_type)
         # addr_valid_pcomp is always a wire: combines other registers signals
         addr_valid_pcomp = LogicVecArray(
@@ -747,7 +767,8 @@ end
             ldq_addr_valid_pcomp.regInit()
             stq_alloc_pcomp.regInit(init=[0] * self.configs.numStqEntries)
             stq_addr_valid_pcomp.regInit()
-            stq_data_valid_pcomp.regInit()
+            if not self.configs.stDataPass:
+                stq_data_valid_pcomp.regInit()
             stq_tail_update_pcomp.regInit()
             addr_same_pcomp.regInit()
             store_is_older_pcomp.regInit()
@@ -759,7 +780,8 @@ end
         for j in range(0, self.configs.numStqEntries):
             em.add_assignment((stq_alloc_pcomp, j), Val(stq_alloc, j))
             em.add_assignment((stq_addr_valid_pcomp, j), Val(stq_addr_valid, j))
-            em.add_assignment((stq_data_valid_pcomp, j), Val(stq_data_valid, j))
+            if not self.configs.stDataPass:
+                em.add_assignment((stq_data_valid_pcomp, j), Val(stq_data_valid, j))
         em.add_assignment(stq_tail_update_pcomp, stq_tail_update)
         for i in range(0, self.configs.numLdqEntries):
             for j in range(0, self.configs.numStqEntries):
@@ -815,12 +837,16 @@ end
         # 1. The load entry is valid, and
         # 2. The load entry is not issued yet, and
         # 3. The address of the load-store pair are both valid and values the same.
+        # (stDataPass implies bypass off, and keeps no data valid bit to check.)
         for i in range(0, self.configs.numLdqEntries):
             for j in range(0, self.configs.numStqEntries):
                 em.add_assignment(
                     (can_bypass_p0, i, j),
-                    Val(ldq_alloc_pcomp, i)
-                    & Val(stq_data_valid_pcomp, j)
+                    (
+                        Val(ldq_alloc_pcomp, i)
+                        if self.configs.stDataPass
+                        else Val(ldq_alloc_pcomp, i) & Val(stq_data_valid_pcomp, j)
+                    )
                     & Val(addr_same_pcomp, i, j)
                     & Val(addr_valid_pcomp, i, j),
                 )
@@ -853,9 +879,135 @@ end
             em.add_assignment(
                 load_req_valid[i], ldq_alloc_pcomp[i] & ldq_addr_valid_pcomp[i]
             )
+        if self.configs.ldDataPass:
+            # Load data passthrough: a port's data must reach it in program
+            # order and there is one holding register per port, so a load may
+            # only go to memory while it is the oldest allocated load of its
+            # port -- or the second oldest while the oldest hands its data to
+            # the port this cycle, so a port can still issue every cycle.
+            # ld_first / ld_second are registered and updated incrementally:
+            # when a port delivers, second moves up to first and the third
+            # oldest (one mask over registered state) to second; a new entry
+            # becomes first or second by how many loads of its port remain.
+            # A group allocates each of its ports at most once and only one
+            # group allocates per cycle, so a port gains at most one entry per
+            # cycle. No priority mask sits on a path from circuit signals.
+            # ld_first also names the entry a port's delivered data belongs to.
+            assert not self.configs.gaMulti, "loadDataPassthrough needs groupMulti off"
+            for g, ports in enumerate(self.configs.gaLdPortIdx):
+                assert len(set(ports)) == len(ports), \
+                    f"group {g} allocates a load port twice"
+            n_e, n_p = self.configs.numLdqEntries, self.configs.numLdPorts
+            ld_port_oh = LogicVecArray(em, 'ld_port_oh', 'w', n_e, n_p)
+            ld_port_oh_next = LogicVecArray(em, 'ld_port_oh_next', 'w', n_e, n_p)
+            ld_first = LogicArray(em, 'ld_first', 'r', n_e)
+            ld_second = LogicArray(em, 'ld_second', 'r', n_e)
+            ld_first.regInit(init=[0] * n_e)
+            ld_second.regInit(init=[0] * n_e)
+            if n_p > 1:
+                # the port index being written this cycle (the register's input)
+                ldq_port_idx_in = LogicVecArray(
+                    em, 'ldq_port_idx_in', 'w', n_e, self.configs.ldpAddrW
+                )
+            for i in range(n_e):
+                if n_p == 1:
+                    em.add_assignment(ld_port_oh[i], Val(1))
+                    em.add_assignment(ld_port_oh_next[i], Val(1))
+                else:
+                    em.add_custom_statement(CustomStatement(
+                        f"\t{ldq_port_idx_in.getNameWrite(i)} <= "
+                        f"{ldq_port_idx.getNameWrite(i)};\n",
+                        f"assign {ldq_port_idx_in.getNameWrite(i)} = "
+                        f"{ldq_port_idx.getNameWrite(i)};\n",
+                    ))
+                    BitsToOH(em, ld_port_oh[i], ldq_port_idx[i])
+                    BitsToOH(em, ld_port_oh_next[i], ldq_port_idx_in[i])
+
+            # first / second / third oldest of each port, as port one-hots
+            ld_first_port = LogicVecArray(em, 'ld_first_port', 'w', n_e, n_p)
+            ld_second_port = LogicVecArray(em, 'ld_second_port', 'w', n_e, n_p)
+            ld_rest_port = LogicVecArray(em, 'ld_rest_port', 'w', n_e, n_p)
+            ld_third_port = LogicVecArray(em, 'ld_third_port', 'w', n_e, n_p)
+            for i in range(n_e):
+                em.add_assignment(
+                    ld_first_port[i], ld_port_oh[i].when(ld_first[i]).else_(Val(0))
+                )
+                em.add_assignment(
+                    ld_second_port[i], ld_port_oh[i].when(ld_second[i]).else_(Val(0))
+                )
+                em.add_assignment(
+                    ld_rest_port[i],
+                    ld_port_oh[i]
+                    .when(ldq_alloc[i] & ~ld_first[i] & ~ld_second[i])
+                    .else_(Val(0)),
+                )
+            CyclicPriorityMasking(em, ld_third_port, ld_rest_port, ldq_head_oh)
+            ld_has_first = LogicVec(em, 'ld_has_first', 'w', n_p)
+            ld_has_second = LogicVec(em, 'ld_has_second', 'w', n_p)
+            ld_has_third = LogicVec(em, 'ld_has_third', 'w', n_p)
+            Reduce(em, ld_has_first, ld_first_port, BinOp.OR)
+            Reduce(em, ld_has_second, ld_second_port, BinOp.OR)
+            Reduce(em, ld_has_third, ld_third_port, BinOp.OR)
+
+            # port handshakes (assigned with the read response below)
+            ld_port_hs = LogicArray(em, 'ld_port_hs', 'w', n_p)
+            ld_port_hs_vec = LogicVec(em, 'ld_port_hs_vec', 'w', n_p)
+            for p in range(n_p):
+                em.add_assignment((ld_port_hs_vec, p), Val(ld_port_hs, p))
+            # loads of the port left after this cycle's delivery: none / one
+            ld_left_none = LogicVec(em, 'ld_left_none', 'w', n_p)
+            ld_left_one = LogicVec(em, 'ld_left_one', 'w', n_p)
+            em.add_assignment(
+                ld_left_none, ~ld_has_first | (ld_port_hs_vec & ~ld_has_second)
+            )
+            em.add_assignment(
+                ld_left_one,
+                (ld_has_first & ~ld_has_second & ~ld_port_hs_vec)
+                | (ld_has_second & ld_port_hs_vec & ~ld_has_third),
+            )
+
+            ld_entry_hs = LogicArray(em, 'ld_entry_hs', 'w', n_e)
+            ld_third = LogicArray(em, 'ld_third', 'w', n_e)
+            ld_new_first = LogicArray(em, 'ld_new_first', 'w', n_e)
+            ld_new_second = LogicArray(em, 'ld_new_second', 'w', n_e)
+            ld_may_issue = LogicArray(em, 'ld_may_issue', 'w', n_e)
+            for i in range(n_e):
+                for name, dst, vec, oh in (
+                    ('hs', ld_entry_hs, ld_port_hs_vec, ld_port_oh),
+                    ('none', ld_new_first, ld_left_none, ld_port_oh_next),
+                    ('one', ld_new_second, ld_left_one, ld_port_oh_next),
+                ):
+                    tmp = LogicVec(em, f'ld_{name}_vec_{i}', 'w', n_p)
+                    em.add_assignment(tmp, oh[i] & vec)
+                    Reduce(em, dst[i], tmp, BinOp.OR)
+                Reduce(em, ld_third[i], ld_third_port[i], BinOp.OR)
+                em.add_assignment(
+                    ld_first[i],
+                    (ld_first[i] & ~ld_entry_hs[i])
+                    | (ld_second[i] & ld_entry_hs[i])
+                    | (ldq_wen[i] & ld_new_first[i]),
+                )
+                em.add_assignment(
+                    ld_second[i],
+                    (ld_second[i] & ~ld_entry_hs[i])
+                    | (ld_third[i] & ld_entry_hs[i])
+                    | (ldq_wen[i] & ld_new_second[i]),
+                )
+                em.add_assignment(
+                    ld_may_issue[i], ld_first[i] | (ld_second[i] & ld_entry_hs[i])
+                )
+
         # Generate list for loads that does not face dependency issue
         for i in range(0, self.configs.numLdqEntries):
-            em.add_assignment(can_load_p0[i], ~load_conflict[i] & load_req_valid[i])
+            if self.configs.ldDataPass:
+                em.add_assignment(
+                    can_load_p0[i],
+                    ~load_conflict[i] & load_req_valid[i] & ld_may_issue[i],
+                )
+            else:
+                em.add_assignment(
+                    can_load_p0[i], ~load_conflict[i] & load_req_valid[i]
+                )
         for i in range(0, self.configs.numLdqEntries):
             em.add_assignment(can_load[i], ~ldq_issue[i] & can_load_p0[i])
 
@@ -894,14 +1046,22 @@ end
         # checked, so there is no need for computing the signals for the next store entry, and for the multiplexing.
 
         # Store request is valid if the entry is allocated and has valid address+data.
+        # With stDataPass the data travels on its own channel, so only the address counts.
         store_req_valid_arr = LogicArray(
             em, 'store_req_valid_arr', 'w', self.configs.numStqEntries
         )
         for i in range(self.configs.numStqEntries):
-            em.add_assignment(
-                store_req_valid_arr[i],
-                stq_alloc_pcomp[i] & stq_addr_valid_pcomp[i] & stq_data_valid_pcomp[i],
-            )
+            if self.configs.stDataPass:
+                em.add_assignment(
+                    store_req_valid_arr[i], stq_alloc_pcomp[i] & stq_addr_valid_pcomp[i]
+                )
+            else:
+                em.add_assignment(
+                    store_req_valid_arr[i],
+                    stq_alloc_pcomp[i]
+                    & stq_addr_valid_pcomp[i]
+                    & stq_data_valid_pcomp[i],
+                )
 
         store_conflict = Logic(em, 'store_conflict', 'w')
         store_req_valid_p0 = Logic(em, 'store_req_valid_p0', pipe0_type)
@@ -1130,15 +1290,133 @@ end
         em.add_assignment(wreq_valid_o[0], store_en_p1)
         em.add_assignment(wreq_id_o[0], Val(0))
         MuxLookUp(em, wreq_addr_o[0], stq_addr, store_idx_p1)
-        MuxLookUp(em, wreq_data_o[0], stq_data, store_idx_p1)
+        if not self.configs.stDataPass:
+            MuxLookUp(em, wreq_data_o[0], stq_data, store_idx_p1)
         em.add_assignment(stq_issue_en, store_en & store_p1_ready)
+
+        if self.configs.stDataPass:
+            # Store data passthrough
+            # The data of a port's stores arrives in that port's program order,
+            # so the oldest store whose data has not been sent yet tells which
+            # port to forward from. stq_data_ptr walks the store queue for that
+            # store, reading stq_port_idx as the port-ID queue. The entry
+            # cannot be reused under the pointer: a store only completes once
+            # its data has been written. Like the issue pointer, the data
+            # pointer stalls once it catches up to the tail, until new stores
+            # are allocated.
+            stq_data_ptr = LogicVec(em, 'stq_data_ptr', 'r', self.configs.stqAddrW)
+            stq_data_ptr_next = LogicVec(
+                em, 'stq_data_ptr_next', 'w', self.configs.stqAddrW
+            )
+            stq_data_en = Logic(em, 'stq_data_en', 'w')
+            stq_data_ptr.regInit(enable=stq_data_en, init=0)
+            WrapAddConst(
+                em, stq_data_ptr_next, stq_data_ptr, 1, self.configs.numStqEntries
+            )
+            em.add_assignment(stq_data_ptr, stq_data_ptr_next)
+
+            # set: the last pending data leaves; hold until stores are allocated
+            store_data_stall = Logic(em, 'store_data_stall', 'r')
+            store_data_stall_set = Logic(em, 'store_data_stall_set', 'w')
+            store_data_stall.regInit(init=0)
+            em.add_assignment(
+                store_data_stall_set,
+                stq_data_en.when(stq_data_ptr_next == stq_tail).else_(Bit(0)),
+            )
+            em.add_assignment(
+                store_data_stall,
+                store_data_stall_set | (store_data_stall & ~stq_tail_update),
+            )
+
+            # The store under the pointer is waiting for its data. A tail update
+            # in this cycle means the stall's entry was just (re)allocated.
+            store_data_alloc = Logic(em, 'store_data_alloc', 'w')
+            store_data_pending = Logic(em, 'store_data_pending', 'w')
+            MuxLookUp(em, store_data_alloc, stq_alloc, stq_data_ptr)
+            em.add_assignment(
+                store_data_pending,
+                store_data_alloc & (~store_data_stall | stq_tail_update),
+            )
+
+            store_data_port_valid = Logic(em, 'store_data_port_valid', 'w')
+            if self.configs.numStPorts > 1:
+                store_data_port = LogicVec(
+                    em, 'store_data_port', 'w', self.configs.stpAddrW
+                )
+                MuxLookUp(em, store_data_port, stq_port_idx, stq_data_ptr)
+                MuxLookUp(em, store_data_port_valid, stp_data_valid_i, store_data_port)
+                MuxLookUp(em, wreq_data_o[0], stp_data_i, store_data_port)
+            else:
+                em.add_assignment(store_data_port_valid, stp_data_valid_i[0])
+                em.add_assignment(wreq_data_o[0], stp_data_i[0])
+            store_data_valid = Logic(em, 'store_data_valid', 'w')
+            em.add_assignment(
+                store_data_valid, store_data_pending & store_data_port_valid
+            )
+            em.add_assignment(wreq_data_valid_o[0], store_data_valid)
+            em.add_assignment(stq_data_en, store_data_valid & wreq_data_ready_i[0])
+            for p in range(self.configs.numStPorts):
+                if self.configs.numStPorts > 1:
+                    em.add_assignment(
+                        stp_data_ready_o[p],
+                        (store_data_pending & wreq_data_ready_i[0])
+                        .when(store_data_port == Val(p, self.configs.stpAddrW))
+                        .else_(Bit(0)),
+                    )
+                else:
+                    em.add_assignment(
+                        stp_data_ready_o[p], store_data_pending & wreq_data_ready_i[0]
+                    )
+
+        if self.configs.ldDataPass:
+            assert self.configs.numLdMem == 1
+            # The response goes to the port of the entry it answers; the port's
+            # holding register keeps it while the port is not ready (memory
+            # cannot be stalled). At most one load per port is in flight, so
+            # the register and a new response never meet.
+            resp_port_oh = LogicVec(em, 'resp_port_oh', 'w', self.configs.numLdPorts)
+            if self.configs.numLdPorts == 1:
+                em.add_assignment(resp_port_oh, Val(1))
+            else:
+                resp_port = LogicVec(em, 'resp_port', 'w', self.configs.ldpAddrW)
+                MuxLookUp(em, resp_port, ldq_port_idx, rresp_id_i[0])
+                BitsToOH(em, resp_port_oh, resp_port)
+            ld_buf_valid = LogicArray(em, 'ld_buf_valid', 'r', self.configs.numLdPorts)
+            ld_buf_data = LogicVecArray(
+                em, 'ld_buf_data', 'r', self.configs.numLdPorts, self.configs.dataW
+            )
+            ld_resp_valid = LogicArray(
+                em, 'ld_resp_valid', 'w', self.configs.numLdPorts
+            )
+            ld_port_valid = LogicArray(
+                em, 'ld_port_valid', 'w', self.configs.numLdPorts
+            )
+            ld_buf_valid.regInit(init=[0] * self.configs.numLdPorts)
+            ld_buf_data.regInit(enable=ld_resp_valid)
+            for p in range(self.configs.numLdPorts):
+                em.add_assignment(
+                    ld_resp_valid[p], rresp_valid_i[0] & Val(resp_port_oh, p)
+                )
+                em.add_assignment(ld_port_valid[p], ld_buf_valid[p] | ld_resp_valid[p])
+                em.add_assignment(ld_port_hs[p], ld_port_valid[p] & ldp_data_ready_i[p])
+                em.add_assignment(ld_buf_valid[p], ld_port_valid[p] & ~ldp_data_ready_i[p])
+                em.add_assignment(ld_buf_data[p], rresp_data_i[0])
+                em.add_assignment(ldp_data_valid_o[p], ld_port_valid[p])
+                em.add_assignment(
+                    ldp_data_o[p],
+                    ld_buf_data[p].when(ld_buf_valid[p]).else_(rresp_data_i[0]),
+                )
+            # A delivered value retires the oldest allocated load of its port.
+            for i in range(self.configs.numLdqEntries):
+                em.add_assignment(ldq_reset[i], ld_first[i] & ld_entry_hs[i])
 
         # Read Response and Bypass
         for i in range(0, self.configs.numLdqEntries):
             # check each read response channel for each load
             read_idx_oh = LogicArray(em, f'read_idx_oh_{i}', 'w', self.configs.numLdMem)
             read_valid = Logic(em, f'read_valid_{i}', 'w')
-            read_data = LogicVec(em, f'read_data_{i}', 'w', self.configs.dataW)
+            if not self.configs.ldDataPass:
+                read_data = LogicVec(em, f'read_data_{i}', 'w', self.configs.dataW)
             for w in range(0, self.configs.numLdMem):
                 em.add_assignment(
                     read_idx_oh[w],
@@ -1146,13 +1424,19 @@ end
                     .when(rresp_id_i[w] == Val(i, self.configs.idW))
                     .else_(Bit(0)),
                 )
-            Mux1H(em, read_data, rresp_data_i, read_idx_oh)
+            if not self.configs.ldDataPass:
+                Mux1H(em, read_data, rresp_data_i, read_idx_oh)
             Reduce(em, read_valid, read_idx_oh, BinOp.OR)
             # multiplex from store queue data
-            bypass_data = LogicVec(em, f'bypass_data_{i}', 'w', self.configs.dataW)
-            Mux1H(em, bypass_data, stq_data, bypass_idx_oh_p1[i])
-            # multiplex from read and bypass data
-            em.add_assignment(ldq_data[i], read_data | bypass_data)
+            if self.configs.ldDataPass:
+                pass  # the data went to the port; ldq_data_valid marks completion
+            elif self.configs.stDataPass:
+                em.add_assignment(ldq_data[i], read_data)
+            else:
+                bypass_data = LogicVec(em, f'bypass_data_{i}', 'w', self.configs.dataW)
+                Mux1H(em, bypass_data, stq_data, bypass_idx_oh_p1[i])
+                # multiplex from read and bypass data
+                em.add_assignment(ldq_data[i], read_data | bypass_data)
             em.add_assignment(ldq_data_wen[i], bypass_en_p1[i] | read_valid)
         for w in range(0, self.configs.numLdMem):
             em.add_assignment(rresp_ready_o[w], Bit(1))
