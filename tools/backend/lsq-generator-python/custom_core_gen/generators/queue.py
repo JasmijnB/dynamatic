@@ -62,6 +62,7 @@ class Queue(Generator):
         allow_access_i = self._add_port(Logic(em, "allow_access", "i"))
 
         # Shared pointer infrastructure
+        em.begin_region('q_ctrl')
         (
             q_done,
             q_issue,
@@ -79,6 +80,7 @@ class Queue(Generator):
         ) = self._setup_pointers(em)
 
         # Address buffer (both types)
+        em.begin_region('q_addr')
         q_addr = LogicVecArray(
             em, "q_addr", "r", self.configs.num_entries, self.configs.addr_width
         )
@@ -89,6 +91,7 @@ class Queue(Generator):
             )
         q_addr.regInit()
 
+        em.begin_region('q_ctrl')
         em.add_assignment(empty_o, q_empty)
 
         # Bypass is an optional fast path that lets an incoming address skip the
@@ -136,6 +139,7 @@ class Queue(Generator):
         em.add_assignment(mem_addr_valid_o, issue_req)
 
         # In bypass mode route circ_addr_i directly; otherwise use the queue buffer
+        em.begin_region('q_issue')
         mem_addr_from_queue = LogicVec(
             em, "mem_addr_from_queue", "w", self.configs.addr_width
         )
@@ -169,6 +173,7 @@ class Queue(Generator):
             em.add_assignment(circ_data_valid_o, mem_data_valid_i)
             em.add_assignment(done_en, mem_data_valid_i & circ_data_ready_i)
 
+        em.begin_region('q_ctrl')
         self._generate_observable_ports(
             em,
             q_addr,
@@ -201,6 +206,7 @@ class Queue(Generator):
         shared, each checker's decoders and compares over them see identical
         inputs, and synthesis merges them once the hierarchy is flattened.
         """
+        em.begin_region('q_order')
         ptr_width = self.configs.q_addr_width + 1
         bb_exec_i = self._add_port(Logic(em, "bb_exec", "i"))
         bb_tail = LogicVec(em, "q_bb_tail", "r", ptr_width)
@@ -411,6 +417,7 @@ class Queue(Generator):
         self._add_alloc_end_ports(em, alloc_end_oh, alloc_full)
 
         if self.configs.is_succ:
+            em.begin_region('q_head_mux')
             queue_head_w = LogicVec(em, "queue_head_w", "w", self.configs.addr_width)
             if n == 0:
                 # Single entry: it is always the head.
@@ -431,6 +438,7 @@ class Queue(Generator):
                 em.add_assignment(queue_head_o, queue_head_w)
 
     def _write_to_file(self, em: Emitter, path_rtl: str, out_file: str = None):
+        em.begin_region(None)
         output_str = em.get_definition_str(self.module_name)
         path = (
             out_file

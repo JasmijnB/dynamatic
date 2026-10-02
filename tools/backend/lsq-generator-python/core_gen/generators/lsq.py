@@ -208,6 +208,7 @@ class LSQ:
         stq_head_oh = LogicVec(em, 'stq_head_oh', 'w', self.configs.numStqEntries)
         #! If this is the lsq master, then we need the following logic
         #! Define new interfaces needed by dynamatic
+        em.begin_region('misc')
         if self.configs.master:
             memStart_ready = Logic(em, 'memStart_ready', 'o')
             memStart_valid = Logic(em, 'memStart_valid', 'i')
@@ -392,7 +393,9 @@ end
             self.configs.numStqEntries,
         )
 
+        em.begin_region('ldq_ctrl')
         BitsToOH(em, ldq_head_oh, ldq_head)
+        em.begin_region('stq_ctrl')
         BitsToOH(em, stq_head_oh, stq_head)
         # indicates tail pointer was just updated (i.e., new stores were allocated)
         stq_tail_update = Logic(em, 'stq_tail_update', 'r')
@@ -410,6 +413,7 @@ end
         pipe0_type = 'r' if self.configs.pipe0 else 'w'
         pipe1_type = 'r' if self.configs.pipe1 else 'w'
 
+        em.begin_region('ldq_ctrl')
         # update queue entries
         # load queue
         ldq_wen_pcomp = LogicArray(
@@ -440,6 +444,7 @@ end
             em.add_assignment(
                 ldq_data_valid[i], ~ldq_wen[i] & (ldq_data_wen[i] | ldq_data_valid[i])
             )
+        em.begin_region('stq_ctrl')
         # store queue
         stq_alloc_next = LogicArray(
             em, 'stq_alloc_next', 'w', self.configs.numStqEntries
@@ -460,6 +465,7 @@ end
                     ~stq_wen[i] & (stq_data_wen[i] | stq_data_valid[i]),
                 )
 
+        em.begin_region('order')
         # order matrix
         # store_is_older(i,j) = (not stq_reset(j) and (stq_alloc(j) or ga_ls_order(i, j)))
         #                  when ldq_wen(i)
@@ -473,20 +479,26 @@ end
                     .else_(~Val(stq_reset, j) & Val(store_is_older, i, j)),
                 )
 
+        em.begin_region('ldq_ctrl')
         # pointers update
         ldq_not_empty = Logic(em, 'ldq_not_empty', 'w')
         stq_not_empty = Logic(em, 'stq_not_empty', 'w')
         Reduce(em, ldq_not_empty, ldq_alloc, BinOp.OR)
         em.add_assignment(ldq_empty, ~ldq_not_empty)
+        em.begin_region('stq_ctrl')
         MuxLookUp(em, stq_not_empty, stq_alloc, stq_head)
         em.add_assignment(stq_empty, ~stq_not_empty)
+        em.begin_region('misc')
         em.add_assignment(empty_o, ldq_empty & stq_empty)
 
+        em.begin_region('ldq_ctrl')
         WrapAdd(em, ldq_tail, ldq_tail, num_loads, self.configs.numLdqEntries)
+        em.begin_region('stq_ctrl')
         WrapAdd(em, stq_tail, stq_tail, num_stores, self.configs.numStqEntries)
         WrapAddConst(em, stq_issue, stq_issue, 1, self.configs.numStqEntries)
         WrapAddConst(em, stq_resp, stq_resp, 1, self.configs.numStqEntries)
 
+        em.begin_region('ldq_ctrl')
         ldq_tail_oh = LogicVec(em, 'ldq_tail_oh', 'w', self.configs.numLdqEntries)
         BitsToOH(em, ldq_tail_oh, ldq_tail)
         ldq_head_next_oh = LogicVec(
@@ -504,6 +516,7 @@ end
         OHToBits(em, ldq_head_next, ldq_head_next_oh)
         em.add_assignment(ldq_head, ldq_head_next.when(ldq_head_sel).else_(ldq_tail))
 
+        em.begin_region('stq_ctrl')
         stq_tail_oh = LogicVec(em, 'stq_tail_oh', 'w', self.configs.numStqEntries)
         BitsToOH(em, stq_tail_oh, stq_tail)
         stq_head_next_oh = LogicVec(
@@ -530,17 +543,21 @@ end
                 stq_head, stq_head_next.when(stq_head_sel).else_(stq_head)
             )
 
+        em.begin_region('ldq_ctrl')
         # Load Queue Entries
         ldq_alloc.regInit(init=[0] * self.configs.numLdqEntries)
         ldq_issue.regInit()
         if self.configs.ldpAddrW > 0:
             ldq_port_idx.regInit(ldq_wen)
         ldq_addr_valid.regInit()
+        em.begin_region('ldq_addr')
         ldq_addr.regInit(ldq_addr_wen)
+        em.begin_region('ldq_ctrl')
         ldq_data_valid.regInit()
         if not self.configs.ldDataPass:
             ldq_data.regInit(ldq_data_wen)
 
+        em.begin_region('stq_ctrl')
         # Store Queue Entries
         stq_alloc.regInit(init=[0] * self.configs.numStqEntries)
         if self.configs.stResp:
@@ -548,23 +565,29 @@ end
         if self.configs.stpAddrW > 0:
             stq_port_idx.regInit(stq_wen)
         stq_addr_valid.regInit()
+        em.begin_region('stq_addr')
         stq_addr.regInit(stq_addr_wen)
+        em.begin_region('stq_ctrl')
         if not self.configs.stDataPass:
             stq_data_valid.regInit()
             stq_data.regInit(stq_data_wen)
 
+        em.begin_region('order')
         # Order for load-store
         store_is_older.regInit()
 
+        em.begin_region('ldq_ctrl')
         # Pointers
         ldq_tail.regInit(init=0)
         ldq_head.regInit(init=0)
 
+        em.begin_region('stq_ctrl')
         stq_tail.regInit(init=0)
         stq_head.regInit(init=0)
         stq_issue.regInit(enable=stq_issue_en, init=0)
         stq_resp.regInit(enable=stq_resp_en, init=0)
 
+        em.begin_region(None)
         ######   Entity Instantiation   ######
 
         # Group Allocator
@@ -671,6 +694,7 @@ end
                 stq_head_oh,
             )
 
+        em.begin_region('conflict')
         ###### Dependency Check ######
         load_idx_oh = LogicVecArray(
             em, 'load_idx_oh', 'w', self.configs.numLdMem, self.configs.numLdqEntries
@@ -857,6 +881,7 @@ end
                     ~Val(ldq_issue, i) & Val(can_bypass_p0, i, j),
                 )
 
+        em.begin_region('conflict')
         # Load
 
         load_conflict = LogicArray(em, 'load_conflict', 'w', self.configs.numLdqEntries)
@@ -873,12 +898,14 @@ end
         # The load conflicts with any store
         for i in range(0, self.configs.numLdqEntries):
             Reduce(em, load_conflict[i], ld_st_conflict[i], BinOp.OR)
+        em.begin_region('ld_issue')
         # The load is valid when the entry is valid and not yet issued, the load address should also be valid.
         # We do not need to check ldq_data_valid, since unissued load request cannot have valid data.
         for i in range(0, self.configs.numLdqEntries):
             em.add_assignment(
                 load_req_valid[i], ldq_alloc_pcomp[i] & ldq_addr_valid_pcomp[i]
             )
+        em.begin_region('ld_pass')
         if self.configs.ldDataPass:
             # Load data passthrough: a port's data must reach it in program
             # order and there is one holding register per port, so a load may
@@ -997,6 +1024,7 @@ end
                     ld_may_issue[i], ld_first[i] | (ld_second[i] & ld_entry_hs[i])
                 )
 
+        em.begin_region('ld_issue')
         # Generate list for loads that does not face dependency issue
         for i in range(0, self.configs.numLdqEntries):
             if self.configs.ldDataPass:
@@ -1039,6 +1067,7 @@ end
                         ~load_idx_oh_LogicArray[i] & can_load_list[w][i],
                     )
 
+        em.begin_region('st_issue')
         # Store
         # When pipelining (pipe0) is enabled, this uses look-ahead to the next store entry to reduce the critical path.
         # Both the current and next stores are checked for validity and conflicts, and the result is multiplexed "late
@@ -1094,6 +1123,7 @@ end
             # with pipelining: also compute for the next entry
             MuxLookUp(em, store_req_valid_next, store_req_valid_arr, stq_issue_next)
 
+        em.begin_region('conflict')
         # A store conflicts with a load when:
         # 1. The load entry is valid, and
         # 2. The load entry hasn't completed (received data from memory), and
@@ -1125,6 +1155,7 @@ end
                     ),
                 )
 
+        em.begin_region('st_issue')
         if self.configs.pipe0:
             # with pipelining: multiplex between current and next store entry
             # Multiplex from current and next
@@ -1163,13 +1194,16 @@ end
         )
 
         # The store conflicts with any load
+        em.begin_region('conflict')
         Reduce(em, store_conflict, st_ld_conflict_p0, BinOp.OR)
+        em.begin_region('st_issue')
         em.add_assignment(
             store_en,
             ~store_conflict & store_req_valid_p0 & ~store_issue_stall_p0,
         )
         em.add_assignment(store_idx, stq_issue)
 
+        em.begin_region('conflict')
         # Bypass
         bypass_idx_oh_p0 = LogicVecArray(
             em,
@@ -1202,6 +1236,7 @@ end
             for i in range(0, self.configs.numLdqEntries):
                 em.add_assignment(bypass_idx_oh_p0[i], Val(0))
 
+        em.begin_region('ld_issue')
         # Pipeline Stage 1
 
         # load registers (if enabled, w/ backpressure)
@@ -1214,9 +1249,11 @@ end
         )
         load_en_p1 = LogicArray(em, 'load_en_p1', pipe1_type, self.configs.numLdMem)
         # store registers (if enabled, w/ backpressure)
+        em.begin_region('st_issue')
         store_idx_p1 = LogicVec(em, 'store_idx_p1', pipe1_type, self.configs.stqAddrW)
         store_en_p1 = Logic(em, 'store_en_p1', pipe1_type)
         # bypass registers (if enabled, w/o backpressure)
+        em.begin_region('conflict')
         bypass_idx_oh_p1 = LogicVecArray(
             em,
             'bypass_idx_oh_p1',
@@ -1228,6 +1265,7 @@ end
             em, 'bypass_en_p1', pipe1_type, self.configs.numLdqEntries
         )
 
+        em.begin_region('ld_issue')
         load_p1_ready = LogicArray(em, 'load_p1_ready', 'w', self.configs.numLdMem)
         store_p1_ready = Logic(em, 'store_p1_ready', 'w')
 
@@ -1267,6 +1305,7 @@ end
             em.add_assignment(bypass_idx_oh_p1[i], bypass_idx_oh_p0[i])
             em.add_assignment(bypass_en_p1[i], bypass_en[i])
 
+        em.begin_region('ld_issue')
         ######    Read/Write    ######
         # Read Request
         for w in range(0, self.configs.numLdMem):
@@ -1286,6 +1325,7 @@ end
                 )
             Reduce(em, ldq_issue_set[i], ldq_issue_set_vec, BinOp.OR)
 
+        em.begin_region('st_issue')
         # Write Request
         em.add_assignment(wreq_valid_o[0], store_en_p1)
         em.add_assignment(wreq_id_o[0], Val(0))
@@ -1294,6 +1334,7 @@ end
             MuxLookUp(em, wreq_data_o[0], stq_data, store_idx_p1)
         em.add_assignment(stq_issue_en, store_en & store_p1_ready)
 
+        em.begin_region('st_pass')
         if self.configs.stDataPass:
             # Store data passthrough
             # The data of a port's stores arrives in that port's program order,
@@ -1368,6 +1409,7 @@ end
                         stp_data_ready_o[p], store_data_pending & wreq_data_ready_i[0]
                     )
 
+        em.begin_region('ld_pass')
         if self.configs.ldDataPass:
             assert self.configs.numLdMem == 1
             # The response goes to the port of the entry it answers; the port's
@@ -1410,6 +1452,7 @@ end
             for i in range(self.configs.numLdqEntries):
                 em.add_assignment(ldq_reset[i], ld_first[i] & ld_entry_hs[i])
 
+        em.begin_region('ld_resp')
         # Read Response and Bypass
         for i in range(0, self.configs.numLdqEntries):
             # check each read response channel for each load
@@ -1441,6 +1484,7 @@ end
         for w in range(0, self.configs.numLdMem):
             em.add_assignment(rresp_ready_o[w], Bit(1))
 
+        em.begin_region('stq_ctrl')
         # Write Response
         if self.configs.stResp:
             for i in range(0, self.configs.numStqEntries):
@@ -1461,6 +1505,7 @@ end
         em.add_assignment(stq_resp_en, wresp_valid_i[0])
         em.add_assignment(wresp_ready_o[0], Bit(1))
 
+        em.begin_region(None)
         ######   Write To File  ######
         # Write to the file
         output_str = em.get_definition_str(self.module_name)

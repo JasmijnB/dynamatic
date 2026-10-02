@@ -131,6 +131,7 @@ class DependencyChecker(Generator):
         allow_sq_access_o = port(Logic(em, "allow_sq_access", "o"))
         allow_pq_access_o = port(Logic(em, "allow_pq_access", "o"))
 
+        em.begin_region('dc_order')
         self._dep_arrays = None  # set by `_build_dep_arrays` (cross-BB only)
         if crosses_bb:
             disparity = self._cross_bb_disparity(em, pq_done_en_i, sq_access_en_i)
@@ -157,6 +158,7 @@ class DependencyChecker(Generator):
 
             # A conflict: a pending (masked) predecessor entry with the head
             # successor's address.
+            em.begin_region('dc_compare')
             conflict = Logic(em, "conflict", "w")
             conflicts = LogicVec(em, "conflicts", "w", n_pq)
             _bits(em, conflicts, n_pq, lambda i: Val(check_mask, i).when(
@@ -173,6 +175,7 @@ class DependencyChecker(Generator):
             grant = conditions + extra_sq + [~conflict | no_dep_pending]
         em.add_assignment(allow_pq_access_o, allow_pq)
         em.add_assignment(allow_sq_access_o, reduce(lambda a, b: a & b, grant))
+        em.begin_region(None)
         self._write_to_file(em, path_rtl, out_file)
 
     def _bb_execution_gates(self):

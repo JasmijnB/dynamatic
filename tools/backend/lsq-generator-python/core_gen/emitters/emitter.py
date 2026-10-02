@@ -42,6 +42,18 @@ class Emitter:
     def use_temp(self):
         self.tempCount += 1
 
+    def begin_region(self, name: str):
+        """Tag everything emitted from here on (statements and registers) as
+        part of region `name`, for core_gen.split_regions to move into its own
+        entity. A no-op unless LSQ_SPLIT_REGIONS=1, so the default HDL stays
+        byte-identical. `name` None returns to the enclosing module."""
+        import os
+        if os.environ.get('LSQ_SPLIT_REGIONS') != '1':
+            return
+        marker = f'-- @region {name or "-"}\n'
+        self.statementString += marker
+        self.regInitString += marker
+
     def add_signal_str(self, code: str):
         self.signalInitString += code
 

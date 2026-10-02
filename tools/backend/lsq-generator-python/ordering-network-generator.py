@@ -419,3 +419,9 @@ structure.generate_from_json(em.new(), config, args.o)
 # Generate the wrapper (ordering networks always connect through an MC)
 wrapper = OrderingNetworkWrapper(args.o, config)
 wrapper.genWrapperSlave(em)
+
+# Measurement only: move the queues' and checkers' @region sections into entities.
+if os.environ.get("LSQ_SPLIT_REGIONS") == "1":
+    assert args.hdl == "vhdl", "LSQ_SPLIT_REGIONS needs --hdl vhdl"
+    from core_gen.split_regions import split_dir
+    split_dir(args.o)
