@@ -79,6 +79,13 @@ class Queue(Generator):
             q_issue_sel,
         ) = self._setup_pointers(em)
 
+        # Per-entry write enable: the allocated entry is the tail. Kept as its own
+        # signal (in queue control) so the address registers below hold only the
+        # addresses.
+        q_addr_wen = LogicVec(em, "q_addr_wen", "w", self.configs.num_entries)
+        for i in range(self.configs.num_entries):
+            em.add_assignment((q_addr_wen, i), Val(q_tail_oh, i) & alloc_en)
+
         # Address buffer (both types)
         em.begin_region('q_addr')
         q_addr = LogicVecArray(
@@ -87,7 +94,7 @@ class Queue(Generator):
         for i in range(self.configs.num_entries):
             em.add_assignment(
                 q_addr[i],
-                circ_addr_i.when(Val(q_tail_oh, i) & alloc_en).else_(q_addr[i]),
+                circ_addr_i.when(Val(q_addr_wen, i)).else_(q_addr[i]),
             )
         q_addr.regInit()
 
@@ -127,6 +134,7 @@ class Queue(Generator):
         em.add_assignment(head_en, head_retire)
 
         # Issue
+        em.begin_region('q_issue')
         can_issue = Logic(em, "can_issue", "w")
 
         em.add_assignment(
