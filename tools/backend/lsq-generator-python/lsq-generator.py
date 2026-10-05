@@ -974,6 +974,12 @@ def main():
     else:
         lsq_wrapper_module.genWrapperSlave(emitter)
 
+    # Measurement only: move the core's @region sections into entities.
+    if os.environ.get("LSQ_SPLIT_REGIONS") == "1":
+        assert args.hdl == "vhdl", "LSQ_SPLIT_REGIONS needs --hdl vhdl"
+        from core_gen.split_regions import split_dir
+        split_dir(args.output_path)
+
 
 if __name__ == "__main__":
     main()

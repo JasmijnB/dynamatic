@@ -262,6 +262,7 @@ initial begin
     //         BB handshake ready signals must be asserted (arrays not full).
     //         Store cannot issue because the store queue is empty.
     // ------------------------------------------------------------------
+    if (!$test$plusargs("ONLY_STRESS")) begin
     test_counter = 1;
     reset();
     ticks(2);
@@ -675,6 +676,129 @@ initial begin
         check(ld_empty, 1, "T10: load queue drained");
         check(st_empty, 1, "T10: store queue drained");
     end
+    end // ONLY_STRESS (T1-T10 assume the default 8/4 queue sizes)
+
+    // ------------------------------------------------------------------
+    // TEST 11: Randomised stress with an exact oracle, many rounds.
+    // Each round: a random interleaving of NP predecessor and NS successor
+    // BB executions (1..8 each), addresses drawn from a pool of two, so
+    // some stores conflict and some may go early. BBs execute in schedule
+    // order; each access enters its queue only after its own BB, with random
+    // delays (store addresses may lag far behind, so predecessor runs can
+    // complete while their successor run is still queued). Memory responds
+    // with random latency. Oracle, at every store issue: each load whose BB
+    // precedes the store's BB has completed, or its address is known and
+    // differs. A round that does not drain within its budget is a deadlock.
+    // ------------------------------------------------------------------
+    if (!$test$plusargs("SKIP_STRESS")) begin
+        int rounds;
+        if (!$value$plusargs("ROUNDS=%d", rounds)) rounds = 300;
+        test_counter = 11;
+        for (int r = 0; r < rounds; r++) begin
+            int np, ns, deps[8], seen_p, k, ld_done, st_issued, bbp_done, bbs_done;
+            bit sched[16];
+            bit ld_sent[8];
+            logic [ADDR_W-1:0] ldaddr[8], staddr[8];
+            bit finished;
+            reset();
+            np = $urandom_range(1, 8);
+            ns = $urandom_range(1, 8);
+            foreach (sched[i]) sched[i] = 0;
+            for (int i = 0; i < np + ns; i++) sched[i] = (i >= np);
+            for (int i = np + ns - 1; i > 0; i--) begin
+                int j; bit t;
+                j = $urandom_range(0, i);
+                t = sched[i]; sched[i] = sched[j]; sched[j] = t;
+            end
+            seen_p = 0; k = 0;
+            for (int i = 0; i < np + ns; i++) begin
+                if (sched[i]) begin deps[k] = seen_p; k++; end
+                else seen_p++;
+            end
+            for (int i = 0; i < 8; i++) begin
+                ldaddr[i] = 32'hA000_0000 + $urandom_range(0, 1);
+                staddr[i] = 32'hA000_0000 + $urandom_range(0, 1);
+                ld_sent[i] = 0;
+            end
+            ld_done = 0; st_issued = 0; bbp_done = 0; bbs_done = 0;
+            finished = 0;
+            fork
+                begin
+                    fork
+                        // BB executions in schedule order.
+                        for (int i = 0; i < np + ns; i++) begin
+                            ticks($urandom_range(0, 2));
+                            if (sched[i]) begin bb1_execute(); bbs_done++; end
+                            else          begin bb0_execute(); bbp_done++; end
+                        end
+                        // Load addresses, each after its BB.
+                        for (int j = 0; j < np; j++) begin
+                            wait (bbp_done > j);
+                            ticks($urandom_range(0, 3));
+                            ld_send_addr(ldaddr[j]);
+                            ld_sent[j] = 1;
+                        end
+                        // Store addresses, each after its BB, possibly late.
+                        for (int j = 0; j < ns; j++) begin
+                            wait (bbs_done > j);
+                            ticks($urandom_range(0, 1) ? $urandom_range(0, 2) : $urandom_range(5, 25));
+                            st_send_addr(staddr[j]);
+                        end
+                        for (int j = 0; j < np; j++) begin
+                            ticks($urandom_range(0, 1) ? 0 : $urandom_range(1, 12));
+                            ld_mem_respond(ldaddr[j], 32'h5000_0000 + j);
+                        end
+                        for (int j = 0; j < np; j++) begin
+                            logic [DATA_W-1:0] d;
+                            ld_recv_data(d);
+                            if (d !== 32'h5000_0000 + j) begin
+                                $display("FAIL [T11 r%0d: ld data %0d]", r, j);
+                                fail_count++;
+                            end
+                        end
+                        for (int j = 0; j < ns; j++) begin
+                            ticks($urandom_range(0, 2));
+                            st_mem_respond(staddr[j], 32'h6000_0000 + j);
+                        end
+                    join
+                    finished = 1;
+                end
+                // Oracle.
+                while (!finished) begin
+                    @(posedge clk);
+                    if (ld_mem_data_valid && ld_mem_data_ready) ld_done++;
+                    if (st_mem_addr_valid && st_issued < ns) begin
+                        for (int j = 0; j < deps[st_issued]; j++)
+                            if (!(j < ld_done || (ld_sent[j] && ldaddr[j] != staddr[st_issued]))) begin
+                                $display("FAIL [T11 r%0d: store %0d (deps %0d) issued before load %0d (done %0d, sent %0d, same addr %0d)]",
+                                         r, st_issued, deps[st_issued], j, ld_done, ld_sent[j],
+                                         ldaddr[j] == staddr[st_issued]);
+                                fail_count++;
+                            end
+                    end
+                    if (st_mem_addr_valid && st_mem_addr_ready) st_issued++;
+                end
+                // Deadlock watchdog.
+                begin
+                    ticks(3000);
+                    if (!finished) begin
+                        $display("FAIL [T11 r%0d: deadlock, np %0d ns %0d, %0d/%0d stores issued]",
+                                 r, np, ns, st_issued, ns);
+                        fail_count++;
+                        $display("\n%0d test(s) failed.", fail_count);
+                        $finish;
+                    end
+                end
+            join_any
+            disable fork;
+            ticks(5);
+            if (!ld_empty || !st_empty) begin
+                $display("FAIL [T11 r%0d: queues not drained]", r);
+                fail_count++;
+            end
+        end
+        $display("T11: %0d random rounds done", rounds);
+    end
 
     // ------------------------------------------------------------------
     // Summary
@@ -685,7 +809,7 @@ end
 
 // Timeout watchdog
 initial begin
-    #10_000_000;
+    #200_000_000;
     $display("TIMEOUT");
     $finish;
 end

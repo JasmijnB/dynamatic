@@ -19,6 +19,13 @@ class QueueConfig:
     # checker (physical frame): the queue then owns the dep-array tail that
     # every such checker of this port shares (see Queue._shared_dep_state).
     shares_dep_state: bool = False
+    # Set by the structure: the successor BBs for which this (predecessor)
+    # port keeps a shared boundary-mark unit (one per BB, used by every
+    # run-scheme checker from this port to a successor in that BB).
+    mark_bbs: tuple = ()
+    # Set by the structure: this (predecessor) port keeps the shared
+    # live-slot bits that its matrix-scheme checkers copy into their rows.
+    needs_live: bool = False
 
     def __init__(self, config: dict):
         self.q_type = config["QueueType"]
@@ -34,6 +41,8 @@ class QueueConfig:
         self.is_succ = False
         self.is_pred = False
         self.shares_dep_state = False
+        self.mark_bbs = ()
+        self.needs_live = False
 
         assert self.q_type in [
             "load",
@@ -58,6 +67,25 @@ def _forced_sequential(config: dict) -> bool:
     the integration tests, can be run with every checker sequential."""
     default = os.environ.get("ON_FORCED_SEQUENTIAL", "0") not in ("", "0")
     return bool(config.get("forcedSequential", default))
+
+
+def _dep_scheme(config: dict) -> str:
+    """A cross-BB checker's scheme, key `depScheme`: "runs" (boundary bits
+    and a run-disparity counter), "matrix" (dependence matrix) or "auto"
+    (the cheaper one for the queue depths, see
+    DependencyChecker.cross_bb_scheme). Without the key, the ON_DEP_SCHEME
+    environment variable, default "auto"."""
+    scheme = config.get("depScheme", os.environ.get("ON_DEP_SCHEME") or "auto")
+    assert scheme in ("auto", "runs", "matrix"), f"unknown depScheme {scheme}"
+    return scheme
+
+
+def _run_lookahead(config: dict) -> int:
+    """`runs` scheme: how many marks ahead the head's boundary is resolved
+    (key `runLookahead`, env ON_RUN_LOOKAHEAD, default 1)."""
+    k = int(config.get("runLookahead", os.environ.get("ON_RUN_LOOKAHEAD", "1")))
+    assert k >= 1, "runLookahead must be >= 1"
+    return k
 
 
 class DependencyCheckerConfig:
@@ -87,6 +115,8 @@ class DependencyCheckerConfig:
         self.access_disparity_width = config.get("AccessDisparityWidth")
         self.dep_entry_ratio = config.get("depEntryRatio", 1)
         self.forced_sequential = _forced_sequential(config)
+        self.dep_scheme = _dep_scheme(config)
+        self.run_lookahead = _run_lookahead(config)
 
     @staticmethod
     def from_parts(
@@ -99,6 +129,8 @@ class DependencyCheckerConfig:
         obj.succ_can_execute_once = dc_config.get("succCanExecuteOnce")
         obj.dep_entry_ratio = dc_config.get("depEntryRatio", 1)
         obj.forced_sequential = _forced_sequential(dc_config)
+        obj.dep_scheme = _dep_scheme(dc_config)
+        obj.run_lookahead = _run_lookahead(dc_config)
         return obj
 
 

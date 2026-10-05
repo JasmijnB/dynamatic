@@ -4,7 +4,7 @@ from core_gen.operators import *
 from core_gen.configs import Configs
 from core_gen.ir import BinOp, Bin, Val, Bit, CustomStatement, reduce_bin
 from custom_core_gen.generators.generator import Generator
-from custom_core_gen.generators.ptr_utils import ptr_next, ptr_index, ptr_diff
+from custom_core_gen.generators.ptr_utils import ptr_next, ptr_index, ptr_diff, count_slot
 from core_gen.utils import isPow2
 
 
@@ -62,6 +62,7 @@ class Queue(Generator):
         allow_access_i = self._add_port(Logic(em, "allow_access", "i"))
 
         # Shared pointer infrastructure
+        em.begin_region('q_ctrl')
         (
             q_done,
             q_issue,
@@ -78,17 +79,26 @@ class Queue(Generator):
             q_issue_sel,
         ) = self._setup_pointers(em)
 
+        # Per-entry write enable: the allocated entry is the tail. Kept as its own
+        # signal (in queue control) so the address registers below hold only the
+        # addresses.
+        q_addr_wen = LogicVec(em, "q_addr_wen", "w", self.configs.num_entries)
+        for i in range(self.configs.num_entries):
+            em.add_assignment((q_addr_wen, i), Val(q_tail_oh, i) & alloc_en)
+
         # Address buffer (both types)
+        em.begin_region('q_addr')
         q_addr = LogicVecArray(
             em, "q_addr", "r", self.configs.num_entries, self.configs.addr_width
         )
         for i in range(self.configs.num_entries):
             em.add_assignment(
                 q_addr[i],
-                circ_addr_i.when(Val(q_tail_oh, i) & alloc_en).else_(q_addr[i]),
+                circ_addr_i.when(Val(q_addr_wen, i)).else_(q_addr[i]),
             )
         q_addr.regInit()
 
+        em.begin_region('q_ctrl')
         em.add_assignment(empty_o, q_empty)
 
         # Bypass is an optional fast path that lets an incoming address skip the
@@ -124,6 +134,7 @@ class Queue(Generator):
         em.add_assignment(head_en, head_retire)
 
         # Issue
+        em.begin_region('q_issue')
         can_issue = Logic(em, "can_issue", "w")
 
         em.add_assignment(
@@ -136,6 +147,7 @@ class Queue(Generator):
         em.add_assignment(mem_addr_valid_o, issue_req)
 
         # In bypass mode route circ_addr_i directly; otherwise use the queue buffer
+        em.begin_region('q_issue')
         mem_addr_from_queue = LogicVec(
             em, "mem_addr_from_queue", "w", self.configs.addr_width
         )
@@ -169,6 +181,7 @@ class Queue(Generator):
             em.add_assignment(circ_data_valid_o, mem_data_valid_i)
             em.add_assignment(done_en, mem_data_valid_i & circ_data_ready_i)
 
+        em.begin_region('q_ctrl')
         self._generate_observable_ports(
             em,
             q_addr,
@@ -184,36 +197,154 @@ class Queue(Generator):
             alloc_full=q_full,
         )
         if self.configs.shares_dep_state:
-            self._shared_dep_state(em, q_done, q_head)
+            self._shared_dep_state(em, q_done, q_head, done_en)
 
         self._write_to_file(em, path_rtl, out_file)
 
-    def _shared_dep_state(self, em: Emitter, q_done, q_head) -> None:
-        """Pointer state that every cross-BB dependency checker of this port
-        would otherwise keep a private copy of.
+    def _shared_dep_state(self, em: Emitter, q_done, q_head, done_en) -> None:
+        """Dep-array state that every cross-BB dependency checker of this
+        port would otherwise keep a private copy of, computed once here.
 
         A checker's predecessor dep array pops on this queue's completions
         and its successor dep array on this queue's retirements, both from 0:
         their heads ARE q_done and q_head. Both arrays push once per BB
         execution of this port, atomically across every checker on the BB
         (structure._route_bb_ports), so all their tails are one BB-execution
-        counter, kept here and advanced by bb_exec_i. With the registers
-        shared, each checker's decoders and compares over them see identical
-        inputs, and synthesis merges them once the hierarchy is flattened.
+        counter, kept here and advanced by bb_exec_i. The decodes of these
+        pointers (one-hots, empty/full) and, per successor BB, the boundary
+        marks (`_mark_unit`) depend on nothing else, so they are built here
+        once and exported to every checker of the port.
         """
-        ptr_width = self.configs.q_addr_width + 1
+        em.begin_region('dc_ptrs')
+        c = self.configs
+        n, aw = c.num_entries, c.q_addr_width
+        ptr_width = aw + 1
         bb_exec_i = self._add_port(Logic(em, "bb_exec", "i"))
         bb_tail = LogicVec(em, "q_bb_tail", "r", ptr_width)
         bb_tail_next = LogicVec(em, "q_bb_tail_next", "w", ptr_width)
-        ptr_next(em, bb_tail_next, bb_tail, self.configs.num_entries)
+        ptr_next(em, bb_tail_next, bb_tail, n)
         em.add_assignment(bb_tail, bb_tail_next)
         bb_tail.regInit(init=0, enable=bb_exec_i)
-        bb_tail_o = self._add_port(LogicVec(em, "bb_tail", "o", ptr_width))
-        em.add_assignment(bb_tail_o, bb_tail)
-        done_full_o = self._add_port(LogicVec(em, "done_full", "o", ptr_width))
-        em.add_assignment(done_full_o, q_done)
-        head_full_o = self._add_port(LogicVec(em, "head_full", "o", ptr_width))
-        em.add_assignment(head_full_o, q_head)
+
+        def one_hot(name, ptr):
+            oh = LogicVec(em, name, "w", n)
+            if aw == 0:
+                em.add_assignment(oh, Val(1, size=1))
+            else:
+                idx = LogicVec(em, f"{name}_idx", "w", aw)
+                ptr_index(em, idx, ptr, n, aw)
+                BitsToOH(em, oh, idx)
+            return oh
+
+        def out(name, sig):
+            o = self._add_port(type(sig)(em, name, "o", sig.size) if isinstance(sig, LogicVec)
+                               else Logic(em, name, "o"))
+            em.add_assignment(o, sig)
+
+        if c.is_pred:
+            # Predecessor role: head = q_done, tail = BB executions.
+            head_oh = one_hot("dep_p_head_oh", q_done)
+            tail_oh = one_hot("dep_p_tail_oh", bb_tail)
+            empty = Logic(em, "dep_p_empty", "w")
+            em.add_assignment(empty, q_done == bb_tail)
+            full = Logic(em, "dep_p_full", "w")
+            tail_msb = Val(em.index_var(bb_tail.getNameRead(), aw))
+            head_msb = Val(em.index_var(q_done.getNameRead(), aw))
+            if aw == 0:
+                em.add_assignment(full, tail_msb != head_msb)
+            else:
+                tail_low = Val(em.slice_var(bb_tail.getNameRead(), aw - 1, 0))
+                head_low = Val(em.slice_var(q_done.getNameRead(), aw - 1, 0))
+                em.add_assignment(full, (tail_msb != head_msb) & (tail_low == head_low))
+            for name, sig in (("dep_p_head_oh_o", head_oh), ("dep_p_tail_oh_o", tail_oh),
+                              ("dep_p_empty_o", empty), ("dep_p_full_o", full)):
+                out(name.removesuffix("_o"), sig)
+            if c.needs_live:
+                # BB-executed, not yet completed slots: what a successor BB
+                # execution copies into a dependence-matrix row.
+                em.begin_region('dc_live')
+                live = LogicArray(em, "dep_p_live", "r", n)
+                for i in range(n):
+                    em.add_assignment(live[i], (live[i] | (bb_exec_i & Val(tail_oh, i)))
+                                      & ~(done_en & Val(head_oh, i)))
+                live.regInit()
+                live_o = self._add_port(LogicVec(em, "dep_p_live", "o", n))
+                for i in range(n):
+                    em.add_assignment((live_o, i), live[i])
+            for bb in c.mark_bbs:
+                self._mark_unit(em, bb, bb_exec_i, q_done, bb_tail, head_oh, tail_oh,
+                                empty, done_en)
+        if c.is_succ:
+            # Successor role: occupancy = BB executions - q_head.
+            em.begin_region('dc_ptrs')
+            cnt = LogicVec(em, "dep_s_cnt", "w", ptr_width)
+            ptr_diff(em, cnt, bb_tail, q_head, n)
+            empty = Logic(em, "dep_s_empty", "w")
+            em.add_assignment(empty, cnt == Val(0, size=ptr_width))
+            full = Logic(em, "dep_s_full", "w")
+            em.add_assignment(full, cnt == Val(n, size=ptr_width))
+            # Slot cnt mod n, for a head-anchored (shifting) successor array.
+            tail_oh = LogicVec(em, "dep_s_tail_oh", "w", n)
+            if aw == 0:
+                em.add_assignment(tail_oh, Val(1, size=1))
+            else:
+                idx = LogicVec(em, "dep_s_tail_idx", "w", aw)
+                count_slot(em, idx, cnt, n, aw)
+                BitsToOH(em, tail_oh, idx)
+            for name, sig in (("dep_s_tail_oh", tail_oh), ("dep_s_empty", empty),
+                              ("dep_s_full", full)):
+                out(name, sig)
+
+    def _mark_unit(self, em: Emitter, bb, bb_exec_i, q_done, bb_tail, head_oh, tail_oh,
+                   empty, done_en) -> None:
+        """Boundary marks of this predecessor port towards successor BB `bb`,
+        in the queue's physical slot frame: the first execution of `bb` after
+        a run of this port's BB marks the most recent entry (tail-1). Shared
+        by every run-scheme checker from this port into `bb`.
+
+        Exports the marks, whether the head entry is marked, and the dependent
+        bit a successor execution of `bb` stamps this cycle: 1 iff this port's
+        BB ran since the last execution of `bb` and the mark could land. It
+        cannot land if the array is empty (tail-1 would wrap behind the head)
+        or its lone entry completes this same cycle (the mark would plant a 1
+        in the slot the head leaves); the successor is then independent."""
+        em.begin_region('dc_marks')
+        n, aw = self.configs.num_entries, self.configs.q_addr_width
+        s_exec = self._add_port(Logic(em, f"succ_bb_exec_bb{bb}", "i"))
+        p_last = Logic(em, f"mk{bb}_pred_executed_last", "r")
+        s_last = Logic(em, f"mk{bb}_succ_executed_last", "r")
+        # Assumes the two BBs never execute in the same cycle.
+        em.add_assignment(p_last, ~s_exec & (bb_exec_i | p_last))
+        em.add_assignment(s_last, ~bb_exec_i & (s_exec | s_last))
+        # At reset no predecessor has run: a successor that goes first is
+        # independent (and does not count as "first after a predecessor").
+        p_last.regInit(init=0)
+        s_last.regInit(init=1)
+        first_s = Logic(em, f"mk{bb}_first_succ", "w")
+        em.add_assignment(first_s, ~s_last & s_exec)
+        head_next = LogicVec(em, f"mk{bb}_head_next", "w", aw + 1)
+        ptr_next(em, head_next, q_done, n)
+        retiring_now = Logic(em, f"mk{bb}_retiring_now", "w")
+        em.add_assignment(retiring_now, done_en & ~empty & (head_next == bb_tail))
+        mark_valid = Logic(em, f"mk{bb}_mark_valid", "w")
+        em.add_assignment(mark_valid, first_s & ~empty & ~retiring_now)
+        mark_consumed = Logic(em, f"mk{bb}_mark_consumed", "w")
+        em.add_assignment(mark_consumed, first_s & (empty | retiring_now))
+        marks = LogicArray(em, f"mk{bb}_marks", "r", n)
+        for i in range(n):
+            em.add_assignment(marks[i], Bit(0).when(Val(tail_oh, i) & bb_exec_i).else_(
+                Bit(1).when(Val(tail_oh, (i + 1) % n) & mark_valid).else_(marks[i])))
+        marks.regInit()
+        marks_o = self._add_port(LogicVec(em, f"marks_bb{bb}", "o", n))
+        for i in range(n):
+            em.add_assignment((marks_o, i), marks[i])
+        at_head = LogicVec(em, f"mk{bb}_at_head_bits", "w", n)
+        for i in range(n):
+            em.add_assignment((at_head, i), marks[i] & Val(head_oh, i))
+        mark_head_o = self._add_port(Logic(em, f"mark_head_bb{bb}", "o"))
+        Reduce(em, mark_head_o, at_head, BinOp.OR)
+        sval_o = self._add_port(Logic(em, f"mark_sval_bb{bb}", "o"))
+        em.add_assignment(sval_o, p_last & ~mark_consumed)
 
     def _add_alloc_end_ports(self, em: Emitter, alloc_end_oh, alloc_full) -> None:
         """The END of the allocated addresses, as a marker a cross-BB checker
@@ -411,6 +542,7 @@ class Queue(Generator):
         self._add_alloc_end_ports(em, alloc_end_oh, alloc_full)
 
         if self.configs.is_succ:
+            em.begin_region('q_head_mux')
             queue_head_w = LogicVec(em, "queue_head_w", "w", self.configs.addr_width)
             if n == 0:
                 # Single entry: it is always the head.
@@ -431,6 +563,7 @@ class Queue(Generator):
                 em.add_assignment(queue_head_o, queue_head_w)
 
     def _write_to_file(self, em: Emitter, path_rtl: str, out_file: str = None):
+        em.begin_region(None)
         output_str = em.get_definition_str(self.module_name)
         path = (
             out_file

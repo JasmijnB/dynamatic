@@ -20,9 +20,12 @@ DC_TO_PQ_MAP = {
     "pq_pending_done_i": "pending_done_o",
     "pq_alloc_end_oh_i": "alloc_end_oh_o",
     "pq_alloc_full_i": "alloc_full_o",
-    # Shared dep-array pointers (physical cross-BB; Queue._shared_dep_state).
-    "pq_dep_head_i": "done_full_o",
-    "pq_dep_tail_i": "bb_tail_o",
+    # Shared dep-array state (cross-BB; Queue._shared_dep_state).
+    "pq_dep_head_oh_i": "dep_p_head_oh_o",
+    "pq_dep_tail_oh_i": "dep_p_tail_oh_o",
+    "pq_dep_empty_i": "dep_p_empty_o",
+    "pq_dep_full_i": "dep_p_full_o",
+    "pq_live_i": "dep_p_live_o",
     "allow_pq_access_o": "allow_access_i",
 }
 
@@ -30,8 +33,9 @@ DC_TO_PQ_MAP = {
 DC_TO_SQ_MAP = {
     "sq_head_i": "queue_head_o",
     "sq_access_en_i": "access_en_o",
-    "sq_dep_head_i": "head_full_o",
-    "sq_dep_tail_i": "bb_tail_o",
+    "sq_dep_tail_oh_i": "dep_s_tail_oh_o",
+    "sq_dep_empty_i": "dep_s_empty_o",
+    "sq_dep_full_i": "dep_s_full_o",
     "allow_sq_access_o": "allow_access_i",
 }
 
@@ -46,9 +50,18 @@ STRUCTURE_QUEUE_PORTS = {"bb_exec_i"}
 # end-of-allocation marker), so the representative-def checks must not
 # require them.
 OPTIONAL_DC_PORTS = {"pq_done_i", "pq_pending_done_i", "pq_alloc_end_oh_i",
-                     "pq_alloc_full_i", "pq_dep_head_i", "pq_dep_tail_i",
-                     "sq_dep_head_i", "sq_dep_tail_i"}
-OPTIONAL_QUEUE_PORTS = {"done_ptr_o", "done_full_o", "head_full_o", "bb_tail_o"}
+                     "pq_alloc_full_i", "pq_dep_head_oh_i", "pq_dep_tail_oh_i",
+                     "pq_dep_empty_i", "pq_dep_full_i", "sq_dep_tail_oh_i",
+                     "sq_dep_empty_i", "sq_dep_full_i", "pq_live_i"}
+OPTIONAL_QUEUE_PORTS = {"done_ptr_o", "dep_p_head_oh_o", "dep_p_tail_oh_o", "dep_p_empty_o",
+                        "dep_p_full_o", "dep_s_tail_oh_o", "dep_s_empty_o", "dep_s_full_o",
+                        "dep_p_live_o"}
+
+# A run-scheme checker reads the shared marks of its predecessor port towards
+# its successor's BB (Queue._mark_unit); the queue port names carry that BB.
+MARK_DC_PORTS = {"pq_marks_i": "marks_bb{}_o", "pq_mark_head_i": "mark_head_bb{}_o",
+                 "sq_mark_value_i": "mark_sval_bb{}_o"}
+MARK_QUEUE_PREFIXES = ("marks_bb", "mark_head_bb", "mark_sval_bb", "succ_bb_exec_bb")
 
 
 def get_global_queue_ports(queue_def):
@@ -57,7 +70,8 @@ def get_global_queue_ports(queue_def):
     # Keep the queue's own port order: this drives the order in which the
     # structure declares its IO, and iterating a set of strings would make
     # generation nondeterministic across processes.
-    return [p for p in queue_def.get_ports().keys() if p not in dc_ports]
+    return [p for p in queue_def.get_ports().keys()
+            if p not in dc_ports and not p.startswith(MARK_QUEUE_PREFIXES)]
 
 
 def make_connecting_signal(signal, em, appended_name=""):
@@ -161,6 +175,11 @@ class DependencyCheckerInstance:
             if port_name in self.ports:
                 self.connect_ports(port_name, DC_TO_SQ_MAP, self.succ, em)
 
+        mark_map = {k: v.format(self.sq_bb) for k, v in MARK_DC_PORTS.items()}
+        for port_name in mark_map:
+            if port_name in self.ports:
+                self.connect_ports(port_name, mark_map, self.pred, em)
+
     def instantate(self, em):
         self.dp_def.instantiate(
             em, self.port_vars, f"dp_q{self.pred.num}_q{self.succ.num}"
@@ -189,6 +208,21 @@ class Structure(Generator):
             if config.port_bb_ids[a] != config.port_bb_ids[b]:
                 cross_bb_ports |= {a, b}
 
+        # Run-scheme checkers share their predecessor port's boundary marks
+        # towards the successor's BB, kept by the predecessor queue.
+        mark_bbs = defaultdict(set)
+        needs_live = set()
+        for edge_idx, (a, b) in enumerate(zip(config.edge_src, config.edge_dst)):
+            if config.port_bb_ids[a] == config.port_bb_ids[b]:
+                continue
+            dc_config = config.dependency_checkers[edge_idx]
+            dc_config.pq = config.queues[config.ports_to_queue[a]]
+            dc_config.sq = config.queues[config.ports_to_queue[b]]
+            if DependencyChecker.cross_bb_scheme(dc_config) == "runs":
+                mark_bbs[a].add(config.port_bb_ids[b])
+            else:
+                needs_live.add(a)
+
         # One Queue def per port instance; is_pred/is_succ are set from the graph
         queue_defs = {}  # port_idx -> Queue
         for port_idx, queue_config_idx in enumerate(config.ports_to_queue):
@@ -196,6 +230,8 @@ class Structure(Generator):
             q_config.is_pred = port_idx in pred_ports
             q_config.is_succ = port_idx in succ_ports
             q_config.shares_dep_state = port_idx in cross_bb_ports
+            q_config.mark_bbs = tuple(sorted(mark_bbs[port_idx]))
+            q_config.needs_live = port_idx in needs_live
             q_def = Queue(
                 name=f"{self.name}_queue_{port_idx}", suffix="", configs=q_config
             )
@@ -226,6 +262,8 @@ class Structure(Generator):
                 dc_config.succ_can_execute_once,
                 dc_config.access_disparity_width,
                 dc_config.forced_sequential,
+                dc_config.dep_scheme,
+                dc_config.run_lookahead,
             )
             edge_to_dc_key[edge_idx] = key
             if key not in dc_def_map:
@@ -275,8 +313,8 @@ class Structure(Generator):
         assert (
             sq_vals_req <= sq_ports
         ), f"DC_TO_SQ_MAP values not in succ ports:  {sq_vals_req - sq_ports}"
-        assert dc_ports <= (pq_keys | sq_keys | CROSS_BB_DC_PORTS), \
-            f"DC ports not fully mapped: {dc_ports - (pq_keys | sq_keys | CROSS_BB_DC_PORTS)}"
+        mapped = pq_keys | sq_keys | CROSS_BB_DC_PORTS | set(MARK_DC_PORTS)
+        assert dc_ports <= mapped, f"DC ports not fully mapped: {dc_ports - mapped}"
 
         # Per-instance consistency: pq_done_i on a DC def must be present iff
         # done_ptr_o is present on that def's own predecessor queue def (both
@@ -422,9 +460,12 @@ class Structure(Generator):
             for dp_checker, prefix in pairs:
                 dp_checker.port_vars[f"{prefix}_bb_valid_i"] = bb_exec
 
-            # ... and advances the shared dep-array tail of each sharing queue.
+            # ... and advances the shared dep-array tail of each sharing queue,
+            # and the mark units of predecessor ports towards this BB.
             if queue_instances is not None:
                 for port_idx, q_inst in queue_instances.items():
                     if (port_bb_ids[port_idx] == bb_id
                             and q_inst.q_def.configs.shares_dep_state):
                         q_inst.port_vars["bb_exec_i"] = [bb_exec]
+                    if bb_id in q_inst.q_def.configs.mark_bbs:
+                        q_inst.port_vars[f"succ_bb_exec_bb{bb_id}_i"] = [bb_exec]
