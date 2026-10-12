@@ -66,12 +66,12 @@ class Queue(Generator):
         (
             q_done,
             q_issue,
-            q_tail,
-            q_head,
-            q_tail_oh,
+            q_alloc,
+            q_grant,
+            q_alloc_oh,
             done_en,
             issue_en,
-            head_en,
+            grant_en,
             alloc_en,
             q_full,
             q_empty,
@@ -79,12 +79,12 @@ class Queue(Generator):
             q_issue_sel,
         ) = self._setup_pointers(em)
 
-        # Per-entry write enable: the allocated entry is the tail. Kept as its own
+        # Per-entry write enable: the allocated entry is at q_alloc. Kept as its own
         # signal (in queue control) so the address registers below hold only the
         # addresses.
         q_addr_wen = LogicVec(em, "q_addr_wen", "w", self.configs.num_entries)
         for i in range(self.configs.num_entries):
-            em.add_assignment((q_addr_wen, i), Val(q_tail_oh, i) & alloc_en)
+            em.add_assignment((q_addr_wen, i), Val(q_alloc_oh, i) & alloc_en)
 
         # Address buffer (both types)
         em.begin_region('q_addr')
@@ -111,7 +111,7 @@ class Queue(Generator):
             bypass_addr_valid = Logic(em, "bypass_addr_valid", "w")
             em.add_assignment(
                 bypass_addr_valid,
-                q_empty & (q_issue == q_head) & circ_addr_valid_i,
+                q_empty & (q_issue == q_grant) & circ_addr_valid_i,
             )
 
             # bypass_active additionally requires allow_access_i; used for all control paths.
@@ -127,11 +127,11 @@ class Queue(Generator):
         em.add_assignment(circ_addr_ready_o, can_alloc)
         em.add_assignment(alloc_en, circ_addr_valid_i & can_alloc)
 
-        # Retirement: also fires when bypass completes (memory accepts)
-        head_retire = ~q_empty & allow_access_i
+        # Grant: also fires when bypass completes (memory accepts)
+        grant_now = ~q_empty & allow_access_i
         if self.configs.bypass:
-            head_retire = head_retire | (bypass_active & mem_addr_ready_i)
-        em.add_assignment(head_en, head_retire)
+            grant_now = grant_now | (bypass_active & mem_addr_ready_i)
+        em.add_assignment(grant_en, grant_now)
 
         # Issue
         em.begin_region('q_issue')
@@ -139,7 +139,7 @@ class Queue(Generator):
 
         em.add_assignment(
             can_issue,
-            ((q_issue == q_head) & head_en) | (q_issue != q_head) | q_full_w_issue,
+            ((q_issue == q_grant) & grant_en) | (q_issue != q_grant) | q_full_w_issue,
         )
         issue_req = can_issue | bypass_active if self.configs.bypass else can_issue
         em.add_assignment(issue_en, issue_req & mem_addr_ready_i)
@@ -186,28 +186,28 @@ class Queue(Generator):
             em,
             q_addr,
             q_done,
-            q_tail,
-            q_head,
+            q_alloc,
+            q_grant,
             done_en,
             alloc_en,
-            head_en,
+            grant_en,
             bypass_addr_valid,
             circ_addr_i,
-            alloc_end_oh=q_tail_oh,
+            alloc_end_oh=q_alloc_oh,
             alloc_full=q_full,
         )
         if self.configs.shares_dep_state:
-            self._shared_dep_state(em, q_done, q_head, done_en)
+            self._shared_dep_state(em, q_done, q_grant, done_en)
 
         self._write_to_file(em, path_rtl, out_file)
 
-    def _shared_dep_state(self, em: Emitter, q_done, q_head, done_en) -> None:
+    def _shared_dep_state(self, em: Emitter, q_done, q_grant, done_en) -> None:
         """Dep-array state that every cross-BB dependency checker of this
         port would otherwise keep a private copy of, computed once here.
 
         A checker's predecessor dep array pops on this queue's completions
         and its successor dep array on this queue's retirements, both from 0:
-        their heads ARE q_done and q_head. Both arrays push once per BB
+        their heads ARE q_done and q_grant. Both arrays push once per BB
         execution of this port, atomically across every checker on the BB
         (structure._route_bb_ports), so all their tails are one BB-execution
         counter, kept here and advanced by bb_exec_i. The decodes of these
@@ -275,10 +275,10 @@ class Queue(Generator):
                 self._mark_unit(em, bb, bb_exec_i, q_done, bb_tail, head_oh, tail_oh,
                                 empty, done_en)
         if c.is_succ:
-            # Successor role: occupancy = BB executions - q_head.
+            # Successor role: occupancy = BB executions - q_grant.
             em.begin_region('dc_ptrs')
             cnt = LogicVec(em, "dep_s_cnt", "w", ptr_width)
-            ptr_diff(em, cnt, bb_tail, q_head, n)
+            ptr_diff(em, cnt, bb_tail, q_grant, n)
             empty = Logic(em, "dep_s_empty", "w")
             em.add_assignment(empty, cnt == Val(0, size=ptr_width))
             full = Logic(em, "dep_s_full", "w")
@@ -349,8 +349,8 @@ class Queue(Generator):
     def _add_alloc_end_ports(self, em: Emitter, alloc_end_oh, alloc_full) -> None:
         """The END of the allocated addresses, as a marker a cross-BB checker
         can test against its check window: alloc_end_oh is the one-hot of the
-        first unallocated slot (the tail), alloc_full says every slot is
-        allocated (the tail then aliases the done slot). A boundary is out of
+        first unallocated slot (q_alloc), alloc_full says every slot is
+        allocated (q_alloc then aliases the done slot). A boundary is out of
         bounds -- its address not known yet -- exactly when this marker lies
         inside the window [head, boundary], so no distance arithmetic is
         needed. Both come from registered state and are shared by every
@@ -367,55 +367,56 @@ class Queue(Generator):
 
     def _setup_pointers(self, em: Emitter):
         """
-        Declare the circular-buffer pointers (done/issue/tail/head), their
-        look-ahead wires, the tail one-hot, and the full/empty status signals.
+        Declare the circular-buffer pointers, in program order
+        q_alloc -> q_grant -> q_issue -> q_done, their look-ahead wires, the
+        q_alloc one-hot, and the full/empty status signals.
 
         When num_entries is a power of 2, uses the bit-flip trick: pointers are
         q_addr_width+1 bits wide and full/empty are purely combinatorial wires.
         The MSB acts as a generation bit so that equal pointers (all bits) means
         empty, and equal lower bits with differing MSBs means full.
 
-        alloc_en, issue_en, and head_en (head-retirement enable) are declared as
+        alloc_en, grant_en, issue_en and done_en are declared as
         wires; the caller is responsible for assigning logic to each of them.
 
         Returns:
-            q_done, q_issue, q_tail, q_head — pointer registers
-            q_tail_oh                       — one-hot of q_tail index
-            done_en, issue_en, head_en, alloc_en — enable wires (to be driven by caller)
-            q_full, q_empty, q_full_w_issue — status signals
-            q_issue_sel                     — lower bits of q_issue for MuxLookUp
+            q_done, q_issue, q_alloc, q_grant     — pointer registers
+            q_alloc_oh                            — one-hot of q_alloc index
+            done_en, issue_en, grant_en, alloc_en — enable wires (to be driven by caller)
+            q_full, q_empty, q_full_w_issue       — status signals
+            q_issue_sel                           — lower bits of q_issue for MuxLookUp
         """
         n = self.configs.q_addr_width
         ptr_width = n + 1
 
-        q_tail = LogicVec(em, "q_tail", "r", ptr_width)
-        q_head = LogicVec(em, "q_head", "r", ptr_width)
+        q_alloc = LogicVec(em, "q_alloc", "r", ptr_width)
+        q_grant = LogicVec(em, "q_grant", "r", ptr_width)
         q_issue = LogicVec(em, "q_issue", "r", ptr_width)
         q_done = LogicVec(em, "q_done", "r", ptr_width)
 
-        q_tail_next = LogicVec(em, "q_tail_next", "w", ptr_width)
-        q_head_next = LogicVec(em, "q_head_next", "w", ptr_width)
+        q_alloc_next = LogicVec(em, "q_alloc_next", "w", ptr_width)
+        q_grant_next = LogicVec(em, "q_grant_next", "w", ptr_width)
         q_issue_next = LogicVec(em, "q_issue_next", "w", ptr_width)
         q_done_next = LogicVec(em, "q_done_next", "w", ptr_width)
 
-        q_tail_oh = LogicVec(em, "q_tail_oh", "w", self.configs.num_entries)
+        q_alloc_oh = LogicVec(em, "q_alloc_oh", "w", self.configs.num_entries)
 
         if n == 0:
             # Single-entry queue (NumEntries == 1): there is no physical index
-            # to compute, the lone entry is always "tail" and always "issue".
-            em.add_assignment(q_tail_oh, Val(1, size=1))
+            # to compute, the lone entry is always the one to allocate and to issue.
+            em.add_assignment(q_alloc_oh, Val(1, size=1))
             q_issue_sel = None
         else:
             # BitsToOH and MuxLookUp need the physical index (lower n bits only)
-            q_tail_idx = LogicVec(em, "q_tail_idx", "w", n)
-            ptr_index(em, q_tail_idx, q_tail, self.configs.num_entries, n)
-            BitsToOH(em, q_tail_oh, q_tail_idx)
+            q_alloc_idx = LogicVec(em, "q_alloc_idx", "w", n)
+            ptr_index(em, q_alloc_idx, q_alloc, self.configs.num_entries, n)
+            BitsToOH(em, q_alloc_oh, q_alloc_idx)
 
             q_issue_sel = LogicVec(em, "q_issue_sel", "w", n)
             ptr_index(em, q_issue_sel, q_issue, self.configs.num_entries, n)
 
         alloc_en = Logic(em, "alloc_en", "w")
-        head_en = Logic(em, "head_en", "w")
+        grant_en = Logic(em, "grant_en", "w")
         issue_en = Logic(em, "issue_en", "w")
         done_en = Logic(em, "done_en", "w")
 
@@ -426,54 +427,54 @@ class Queue(Generator):
         for pt, pt_next in [
             (q_done, q_done_next),
             (q_issue, q_issue_next),
-            (q_tail, q_tail_next),
-            (q_head, q_head_next),
+            (q_alloc, q_alloc_next),
+            (q_grant, q_grant_next),
         ]:
             ptr_next(em, pt_next, pt, self.configs.num_entries)
             em.add_assignment(pt, pt_next)
 
         q_done.regInit(init=0, enable=done_en)
         q_issue.regInit(init=0, enable=issue_en)
-        q_tail.regInit(init=0, enable=alloc_en)
-        q_head.regInit(init=0, enable=head_en)
+        q_alloc.regInit(init=0, enable=alloc_en)
+        q_grant.regInit(init=0, enable=grant_en)
 
-        # Full between tail and done: lower bits match but generation bits differ.
+        # Full between alloc and done: lower bits match but generation bits differ.
         # With n == 0 (single-entry queue) the pointer IS the generation bit -
         # there are no low bits to compare, so equality is trivial.
-        tail_msb = Val(em.index_var(q_tail.getNameRead(), n))
+        alloc_msb = Val(em.index_var(q_alloc.getNameRead(), n))
         done_msb = Val(em.index_var(q_done.getNameRead(), n))
         if n == 0:
-            em.add_assignment(q_full, tail_msb != done_msb)
+            em.add_assignment(q_full, alloc_msb != done_msb)
         else:
             # Same slot, other generation (for every N, see ptr_utils).
-            tail_low = Val(em.slice_var(q_tail.getNameRead(), n - 1, 0))
+            alloc_low = Val(em.slice_var(q_alloc.getNameRead(), n - 1, 0))
             done_low = Val(em.slice_var(q_done.getNameRead(), n - 1, 0))
-            em.add_assignment(q_full, (tail_msb != done_msb) & (tail_low == done_low))
+            em.add_assignment(q_full, (alloc_msb != done_msb) & (alloc_low == done_low))
 
         # Empty: all bits (including generation) equal
-        em.add_assignment(q_empty, q_tail == q_head)
+        em.add_assignment(q_empty, q_alloc == q_grant)
 
-        # Full between issue and head: same lower bits, different generation
+        # Full between issue and grant: same lower bits, different generation
         issue_msb = Val(em.index_var(q_issue.getNameRead(), n))
-        head_msb = Val(em.index_var(q_head.getNameRead(), n))
+        grant_msb = Val(em.index_var(q_grant.getNameRead(), n))
         if n == 0:
-            em.add_assignment(q_full_w_issue, issue_msb != head_msb)
+            em.add_assignment(q_full_w_issue, issue_msb != grant_msb)
         else:
             issue_low = Val(em.slice_var(q_issue.getNameRead(), n - 1, 0))
-            head_low = Val(em.slice_var(q_head.getNameRead(), n - 1, 0))
+            grant_low = Val(em.slice_var(q_grant.getNameRead(), n - 1, 0))
             em.add_assignment(
-                q_full_w_issue, (issue_msb != head_msb) & (issue_low == head_low)
+                q_full_w_issue, (issue_msb != grant_msb) & (issue_low == grant_low)
             )
 
         return (
             q_done,
             q_issue,
-            q_tail,
-            q_head,
-            q_tail_oh,
+            q_alloc,
+            q_grant,
+            q_alloc_oh,
             done_en,
             issue_en,
-            head_en,
+            grant_en,
             alloc_en,
             q_full,
             q_empty,
@@ -486,11 +487,11 @@ class Queue(Generator):
         em: Emitter,
         q_addr,
         q_done,
-        q_tail,
-        q_head,
+        q_alloc,
+        q_grant,
         done_en,
         alloc_en,
-        head_en,
+        grant_en,
         bypass_active=None,
         circ_addr_i=None,
         alloc_end_oh=None,
@@ -510,34 +511,34 @@ class Queue(Generator):
 
         # With n == 0 (single-entry queue) there is no index to expose: the
         # pointer register is pure generation bit, so these ports would be
-        # zero-width. Omit them; nothing downstream needs a done/alloc/head
+        # zero-width. Omit them; nothing downstream needs a done/alloc/grant
         # index into a 1-entry buffer (DependencyChecker.pq_done_i is omitted
         # the same way, see DependencyChecker.generate).
         if n > 0:
             done_ptr_o = self._add_port(LogicVec(em, "done_ptr", "o", n))
             alloc_ptr_o = self._add_port(LogicVec(em, "alloc_ptr", "o", n))
-            head_ptr_o = self._add_port(LogicVec(em, "head_ptr", "o", n))
+            grant_ptr_o = self._add_port(LogicVec(em, "grant_ptr", "o", n))
 
             ptr_index(em, done_ptr_o, q_done, self.configs.num_entries, n)
-            ptr_index(em, alloc_ptr_o, q_tail, self.configs.num_entries, n)
-            ptr_index(em, head_ptr_o, q_head, self.configs.num_entries, n)
+            ptr_index(em, alloc_ptr_o, q_alloc, self.configs.num_entries, n)
+            ptr_index(em, grant_ptr_o, q_grant, self.configs.num_entries, n)
 
-        # Number of entries from done to tail (allocated but not yet complete).
+        # Number of entries from done to alloc (allocated but not yet complete).
         length_o = self._add_port(LogicVec(em, "length", "o", ptr_width))
-        ptr_diff(em, length_o, q_tail, q_done, self.configs.num_entries)
+        ptr_diff(em, length_o, q_alloc, q_done, self.configs.num_entries)
 
-        # Number of entries from done to head: accesses retired (let through
+        # Number of entries from done to grant: accesses granted (let through
         # by allow_access_i) but not yet completed. A same-BB dependency
         # checker gates this queue's retirement on it, so that the completions
         # already in flight cannot underflow its disparity counter.
         pending_done_o = self._add_port(LogicVec(em, "pending_done", "o", ptr_width))
-        ptr_diff(em, pending_done_o, q_head, q_done, self.configs.num_entries)
+        ptr_diff(em, pending_done_o, q_grant, q_done, self.configs.num_entries)
 
         done_en_o = self._add_port(Logic(em, "done_en", "o"))
-        access_en_o = self._add_port(Logic(em, "access_en", "o"))
+        grant_en_o = self._add_port(Logic(em, "grant_en", "o"))
 
         em.add_assignment(done_en_o, done_en)
-        em.add_assignment(access_en_o, head_en)
+        em.add_assignment(grant_en_o, grant_en)
 
         self._add_alloc_end_ports(em, alloc_end_oh, alloc_full)
 
@@ -548,9 +549,9 @@ class Queue(Generator):
                 # Single entry: it is always the head.
                 em.add_assignment(queue_head_w, q_addr[0])
             else:
-                q_head_sel = LogicVec(em, "q_head_sel", "w", n)
-                ptr_index(em, q_head_sel, q_head, self.configs.num_entries, n)
-                MuxLookUp(em, queue_head_w, q_addr, q_head_sel)
+                q_grant_sel = LogicVec(em, "q_grant_sel", "w", n)
+                ptr_index(em, q_grant_sel, q_grant, self.configs.num_entries, n)
+                MuxLookUp(em, queue_head_w, q_addr, q_grant_sel)
             queue_head_o = self._add_port(
                 LogicVec(em, "queue_head", "o", self.configs.addr_width)
             )

@@ -96,7 +96,7 @@ class DependencyChecker(Generator):
             self._pq_alloc_full_i = port(Logic(em, "pq_alloc_full", "i"))
             # Dep-array state decoded once per port by the queues
             # (Queue._shared_dep_state): heads are the predecessor's q_done
-            # and the successor's q_head, tails each port's BB-execution
+            # and the successor's q_grant, tails each port's BB-execution
             # count, which advance on exactly this checker's head_en/tail_en.
             n_sq = c.sq.num_entries
             self._shared = SimpleNamespace(
@@ -125,7 +125,7 @@ class DependencyChecker(Generator):
 
         # Successor and outputs.
         sq_head = port(LogicVec(em, "sq_head", "i", c.sq.addr_width))
-        sq_access_en_i = port(Logic(em, "sq_access_en", "i"))
+        sq_grant_en_i = port(Logic(em, "sq_grant_en", "i"))
         allow_sq_access_o = port(Logic(em, "allow_sq_access", "o"))
         allow_pq_access_o = port(Logic(em, "allow_pq_access", "o"))
 
@@ -133,11 +133,11 @@ class DependencyChecker(Generator):
         self._dep_arrays = None  # set by `_build_dep_arrays` (cross-BB only)
         scheme = self.cross_bb_scheme(c) if crosses_bb else None
         if scheme == "matrix":
-            disparity = self._cross_bb_matrix_disparity(em, pq_done_en_i, sq_access_en_i)
+            disparity = self._cross_bb_matrix_disparity(em, pq_done_en_i, sq_grant_en_i)
         elif scheme == "runs":
-            disparity = self._cross_bb_runs_disparity(em, pq_done_en_i, sq_access_en_i)
+            disparity = self._cross_bb_runs_disparity(em, pq_done_en_i, sq_grant_en_i)
         else:
-            disparity = self._same_bb_disparity(em, pq_done_en_i, sq_access_en_i)
+            disparity = self._same_bb_disparity(em, pq_done_en_i, sq_grant_en_i)
         no_dep_pending = disparity.no_dep_pending
         allow_pq, extra_sq = self._bb_execution_gates()
 
@@ -224,12 +224,12 @@ class DependencyChecker(Generator):
     # Same-BB scheme
     # ===--------------------------------------------------------------------===
 
-    def _same_bb_disparity(self, em: Emitter, pq_done_en_i, sq_access_en_i) -> _Disparity:
+    def _same_bb_disparity(self, em: Emitter, pq_done_en_i, sq_grant_en_i) -> _Disparity:
         """AD < 0: every predecessor access before the head successor is done.
         In forced-sequential mode the grant keeps AD <= 0, so neither the
         window's allocation gate nor its overflow cap is needed."""
         ad = self._ad_counter(em, self.configs.access_disparity_width,
-                              sq_access_en_i, pq_done_en_i)
+                              sq_grant_en_i, pq_done_en_i)
         no_dep_pending = Logic(em, "no_dep_pending", "w")
         em.add_assignment(no_dep_pending, ad < Val(0, size=self.configs.access_disparity_width))
         return _Disparity(no_dep_pending, ad=ad)
@@ -303,7 +303,7 @@ class DependencyChecker(Generator):
             conditions.append(ad_not_maxed)
         return check_mask, conditions
 
-    def _ad_counter(self, em: Emitter, ad_width, sq_access_en, pq_done_en):
+    def _ad_counter(self, em: Emitter, ad_width, sq_grant_en, pq_done_en):
         """The access disparity, plus the predecessor-retire underflow guard.
 
         AD is kept in range by back-pressure, never by clamping: a clamped
@@ -327,9 +327,9 @@ class DependencyChecker(Generator):
         # One adder; the +1 / 0 / -1 delta is built bitwise (two's complement)
         # because the Verilog emitter cannot nest signed literals in a when-else.
         delta = LogicVec(em, "ad_delta", "w", ad_width)
-        em.add_assignment((delta, 0), sq_access_en ^ pq_done_en)
+        em.add_assignment((delta, 0), sq_grant_en ^ pq_done_en)
         for b in range(1, ad_width):
-            em.add_assignment((delta, b), pq_done_en & ~sq_access_en)
+            em.add_assignment((delta, b), pq_done_en & ~sq_grant_en)
         em.add_assignment(ad, ad + delta)
 
         # Guard at a width holding AD - pending without wrapping
@@ -352,7 +352,7 @@ class DependencyChecker(Generator):
     # Cross-BB scheme, dependence-matrix variant (`depMatrix`)
     # ===--------------------------------------------------------------------===
 
-    def _cross_bb_matrix_disparity(self, em: Emitter, pq_done_en, sq_access_en) -> _Disparity:
+    def _cross_bb_matrix_disparity(self, em: Emitter, pq_done_en, sq_grant_en) -> _Disparity:
         """A classic dependence matrix, one row per queued successor.
 
         `pq_live[p]` (shared per predecessor port, Queue._shared_dep_state):
@@ -389,7 +389,7 @@ class DependencyChecker(Generator):
         for i in range(n_sq):
             for p in range(n_pq):
                 above = written[i + 1][p] if i + 1 < n_sq else Bit(0)
-                em.add_assignment(rows[i][p], above.when(sq_access_en).else_(written[i][p]))
+                em.add_assignment(rows[i][p], above.when(sq_grant_en).else_(written[i][p]))
             rows[i].regInit()
 
         em.begin_region('dc_headrow')
@@ -417,7 +417,7 @@ class DependencyChecker(Generator):
     # Cross-BB scheme, run-disparity variant (`depScheme: runs`)
     # ===--------------------------------------------------------------------===
 
-    def _cross_bb_runs_disparity(self, em: Emitter, pq_done_en, sq_access_en) -> _Disparity:
+    def _cross_bb_runs_disparity(self, em: Emitter, pq_done_en, sq_grant_en) -> _Disparity:
         """The marks and dependent bits of the mark scheme, tracked by one
         signed counter instead of a boundary register.
 
@@ -439,7 +439,7 @@ class DependencyChecker(Generator):
         c = self.configs
         n_pq, n_sq = c.pq.num_entries, c.sq.num_entries
         x = self._explicit_ptrs(em)
-        s0 = self._succ_bits(em, n_sq, x, sq_access_en)
+        s0 = self._succ_bits(em, n_sq, x, sq_grant_en)
 
         em.begin_region('dc_counter')
         # C in [-n_sq, n_pq]: a satisfied run waits in the successor queue,
@@ -448,7 +448,7 @@ class DependencyChecker(Generator):
         cnt = LogicVec(em, "run_disparity", "r", cw, is_signed=True)
         cnt.regInit(init=0)
         s_ret = Logic(em, "run_succ_retire", "w")
-        em.add_assignment(s_ret, sq_access_en & s0)
+        em.add_assignment(s_ret, sq_grant_en & s0)
         p_ret = Logic(em, "run_pred_retire", "w")
         em.add_assignment(p_ret, pq_done_en & x.mark_head)
         delta = LogicVec(em, "run_delta", "w", cw)
