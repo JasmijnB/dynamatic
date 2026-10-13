@@ -55,31 +55,17 @@ def ptr_full(em, out, a, b, n: int) -> None:
     em.add_assignment(out, differ if n == 0 else differ & (_low(em, a, n) == _low(em, b, n)))
 
 
-def slot_one_hot(em, name: str, idx_name: str, ptr, n_entries: int, n: int,
-                 slot=None):
+def slot_one_hot(em, name: str, idx_name: str, ptr, n_entries: int, n: int):
     """A new n_entries-bit one-hot of ptr's slot, through the n-bit index
-    idx_name, computed by `slot` (ptr_index or count_slot). A single entry
-    (n == 0) is always slot 0."""
+    idx_name. A single entry (n == 0) is always slot 0."""
     oh = LogicVec(em, name, "w", n_entries)
     if n == 0:
         em.add_assignment(oh, Val(1, size=1))
     else:
         idx = LogicVec(em, idx_name, "w", n)
-        (slot or ptr_index)(em, idx, ptr, n_entries, n)
+        ptr_index(em, idx, ptr, n_entries, n)
         BitsToOH(em, oh, idx)
     return oh
-
-
-def count_slot(em, out, cnt, n_entries: int, n: int) -> None:
-    """out (n bits) = the slot just past `cnt` entries from slot 0, for an
-    occupancy cnt in [0, N]: cnt mod N (so a full count N maps to slot 0)."""
-    if isPow2(n_entries):
-        em.add_assignment(out, _low(em, cnt, n))
-        return
-    em.add_assignment(
-        out,
-        Val(0, size=n).when(cnt == Val(n_entries, size=cnt.size))
-        .else_(_low(em, cnt, n)))
 
 
 def ptr_diff(em, out, a, b, n_entries: int) -> None:

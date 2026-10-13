@@ -6,7 +6,7 @@ from core_gen.operators import *
 from core_gen.ir import BinOp, Val, Bit
 from custom_core_gen.generators.generator import Generator
 from custom_core_gen.generators.ptr_utils import (
-    ptr_next, ptr_index, ptr_diff, ptr_full, count_slot, slot_one_hot)
+    ptr_next, ptr_index, ptr_diff, ptr_full, slot_one_hot)
 
 
 class Queue(Generator):
@@ -212,11 +212,12 @@ class Queue(Generator):
             em.add_assignment(empty, cnt == Val(0, size=ptr_width))
             full = Logic(em, "dep_s_full", "w")
             em.add_assignment(full, cnt == Val(n, size=ptr_width))
-            # Slot cnt mod n, for a head-anchored (shifting) successor array.
-            tail_oh = slot_one_hot(em, "dep_s_tail_oh", "dep_s_tail_idx", cnt, n, aw,
-                                   slot=count_slot)
-            for name, sig in (("dep_s_tail_oh", tail_oh), ("dep_s_empty", empty),
-                              ("dep_s_full", full)):
+            # The successor arrays live in the queue's physical slot frame:
+            # written at the BB-execution tail, read at q_grant.
+            head_oh = slot_one_hot(em, "dep_s_head_oh", "dep_s_head_idx", q_grant, n, aw)
+            tail_oh = slot_one_hot(em, "dep_s_tail_oh", "dep_s_tail_idx", bb_tail, n, aw)
+            for name, sig in (("dep_s_head_oh", head_oh), ("dep_s_tail_oh", tail_oh),
+                              ("dep_s_empty", empty), ("dep_s_full", full)):
                 self._out(em, name, sig)
 
     def _mark_unit(self, em: Emitter, bb, bb_exec_i, q_done, bb_tail, head_oh, tail_oh,

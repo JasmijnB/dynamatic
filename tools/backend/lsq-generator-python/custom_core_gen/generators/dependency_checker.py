@@ -36,8 +36,8 @@ handshakes. The scheme is chosen per checker by queue depth
 
 The dep arrays' pointers are shared per port (Queue._shared_dep_state). The
 predecessor array lives in the queue's physical slot frame, because its slots
-index the queue's addresses; the successor array is head-anchored (only the
-successor's head address is ever compared, so no frame has to match).
+index the queue's addresses; the successor array lives in its queue's slot
+frame too, read at the head (q_grant).
 
 A single-entry queue (NumEntries == 1) has q_addr_width == 0: there is no slot
 index, the pointer is the bare generation bit, and the lone slot is always
@@ -70,6 +70,11 @@ def _any(em: Emitter, name: str, bits_name: str, n: int, bit):
     _bits(em, bits, n, bit)
     Reduce(em, out, bits, BinOp.OR)
     return out
+
+
+def _head_read(slots, head_oh):
+    """The slot that the one-hot head_oh selects, as an AND-OR."""
+    return reduce(lambda a, b: a | b, [s & Val(head_oh, i) for i, s in enumerate(slots)])
 
 
 @dataclass
@@ -130,6 +135,7 @@ class DependencyChecker(Generator):
                 pq_tail_oh=port(LogicVec(em, "pq_dep_tail_oh", "i", n_pq)),
                 pq_empty=port(Logic(em, "pq_dep_empty", "i")),
                 pq_full=port(Logic(em, "pq_dep_full", "i")),
+                sq_head_oh=port(LogicVec(em, "sq_dep_head_oh", "i", n_sq)),
                 sq_tail_oh=port(LogicVec(em, "sq_dep_tail_oh", "i", n_sq)),
                 sq_empty=port(Logic(em, "sq_dep_empty", "i")),
                 sq_full=port(Logic(em, "sq_dep_full", "i")),
@@ -377,9 +383,9 @@ class DependencyChecker(Generator):
         predecessor slot p is BB-executed and not yet completed. A successor
         BB execution copies pq_live into its row: exactly the predecessor
         accesses preceding it in program order that are still pending. A
-        predecessor completion clears its column in every row. The rows are
-        head-anchored like the successor dep array, so the head row needs no
-        read mux. No predecessor pending: row 0 is zero."""
+        predecessor completion clears its column in every row. The rows sit
+        in the successor queue's slot frame; the head row is read at q_grant.
+        No predecessor pending: the head row is zero."""
         n_pq = self.configs.pq.num_entries
         n_sq = self.configs.sq.num_entries
         shared = self._bb_handshakes(em)
@@ -402,13 +408,13 @@ class DependencyChecker(Generator):
                         rows[i][p] & ~Val(clear_col, p)))
         for i in range(n_sq):
             for p in range(n_pq):
-                above = written[i + 1][p] if i + 1 < n_sq else Bit(0)
-                em.add_assignment(rows[i][p], above.when(sq_grant_en).else_(written[i][p]))
+                em.add_assignment(rows[i][p], written[i][p])
             rows[i].regInit()
 
         em.begin_region('dc_headrow')
         head_row = LogicVec(em, "dep_head_row", "w", n_pq)
-        _bits(em, head_row, n_pq, lambda p: rows[0][p])
+        _bits(em, head_row, n_pq, lambda p: _head_read(
+            [rows[i][p] for i in range(n_sq)], shared.sq_head_oh))
         dep_pending = Logic(em, "dep_pending", "w")
         Reduce(em, dep_pending, head_row, BinOp.OR)
         no_dep_pending = Logic(em, "no_dep_pending", "w")
@@ -520,7 +526,7 @@ class DependencyChecker(Generator):
         head_disparity_le(k): whether its head disparity (the run disparity
         plus that bit) is at most k."""
         n_pq, n_sq = self.configs.pq.num_entries, self.configs.sq.num_entries
-        head_dependent = self._succ_bits(em, n_sq, shared, sq_grant_en)
+        head_dependent = self._succ_bits(em, n_sq, shared)
 
         em.begin_region('dc_counter')
         # In [-n_sq, n_pq]: a satisfied run waits in the successor queue, a
@@ -590,12 +596,11 @@ class DependencyChecker(Generator):
         em.add_assignment(executed, valid_i & ready)
         return executed
 
-    def _succ_bits(self, em: Emitter, n: int, shared, head_en):
-        """The successor's dependent (run-start) bits, head-anchored: slot 0
-        is the head and the array shifts down on a retire. A BB execution
-        writes the shared mark unit's value at the tail slot, which then
-        shifts with the pop, so no stale bit sits above it. Returns the
-        head's bit."""
+    def _succ_bits(self, em: Emitter, n: int, shared):
+        """The successor's dependent (run-start) bits, in the successor
+        queue's slot frame: a BB execution writes the shared mark unit's
+        value at the tail slot, overwriting whatever a retired entry left
+        there. Returns the head's bit."""
         em.begin_region('dc_sbits')
         array = LogicArray(em, "sq_array", "r", n)
         written = LogicArray(em, "sq_array_written", "w", n)
@@ -603,10 +608,11 @@ class DependencyChecker(Generator):
             em.add_assignment(written[i], shared.mark_sval.when(
                 Val(shared.sq_tail_oh, i) & shared.sq_tail_en).else_(array[i]))
         for i in range(n):
-            above = written[i + 1] if i + 1 < n else Bit(0)
-            em.add_assignment(array[i], above.when(head_en).else_(written[i]))
+            em.add_assignment(array[i], written[i])
         array.regInit()
-        return array[0]
+        head = Logic(em, "sq_array_head", "w")
+        em.add_assignment(head, _head_read([array[i] for i in range(n)], shared.sq_head_oh))
+        return head
 
     @staticmethod
     def _fill_to_first_set(em: Emitter, dout, bits, pivot, n: int, name: str) -> None:

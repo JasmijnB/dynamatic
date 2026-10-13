@@ -32,6 +32,7 @@ DC_TO_PQ_MAP = {
 DC_TO_SQ_MAP = {
     "sq_head_i": "queue_head_o",
     "sq_grant_en_i": "grant_en_o",
+    "sq_dep_head_oh_i": "dep_s_head_oh_o",
     "sq_dep_tail_oh_i": "dep_s_tail_oh_o",
     "sq_dep_empty_i": "dep_s_empty_o",
     "sq_dep_full_i": "dep_s_full_o",
