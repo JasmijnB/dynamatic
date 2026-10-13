@@ -2,33 +2,37 @@
 predecessor access preceding them in program order has completed or is known
 to target a different address.
 
-Both schemes come in two halves, combined in `generate`:
-  - the disparity (`_*_disparity`): the state tracking how far the successor
-    runs ahead of the predecessor, and from it `no_dep_pending`: the head
-    successor has no pending predecessor left;
-  - the window (`_*_window`), built on that state: `check_mask`, the physical
-    predecessor slots the head successor's address must be compared against,
-    plus scheme-specific extra grant conditions.
+Every scheme comes in two halves, combined in `generate`:
+  - the disparity (`_<scheme>_disparity`): the state tracking how far the
+    successor runs ahead of the predecessor, and from it `no_dep_pending`:
+    the head successor has no pending predecessor left;
+  - the window (`_same_bb_window`, `_cross_bb_window`), built on that state:
+    `check_mask`, the physical predecessor slots the head successor's address
+    must be compared against, plus scheme-specific extra grant conditions.
 The forced-sequential mode (`forcedSequential`) builds the disparity only and
 grants the head successor on `no_dep_pending` alone, without comparing
 addresses: it waits for every predecessor access preceding it in program order.
 
-Same BB (`_same_bb_*`): the order of the two accesses is static, so a
-signed up/down counter, the access disparity AD (+1 per successor access, -1
-per predecessor completion), is the head-relative index of the last
-predecessor entry the head successor must check (AD < 0: nothing pending).
+Same BB (`same_bb`): the order of the two accesses is static, so a signed
+up/down counter, the access disparity AD (+1 per successor access, -1 per
+predecessor completion), is the head-relative index of the last predecessor
+entry the head successor must check (AD < 0: nothing pending).
 
-Different BBs (`_cross_bb_*`): the interleaving is dynamic and arrives as
-BB-execution handshakes. Two schemes, chosen per checker by queue depth
+Different BBs: the interleaving is dynamic and arrives as BB-execution
+handshakes. The scheme is chosen per checker by queue depth
 (`cross_bb_scheme`, or the `depScheme` key):
   - runs: boundary bits. The first successor execution after a predecessor
     run marks the most recent predecessor entry (predecessor dep array) and
     stamps the successor entry dependent (successor dep array). One signed
-    counter, the run disparity, tracks how many marks the head successor is
-    behind; its window ends at that mark. O(n_pq + n_sq) state.
+    counter, the run disparity (the access disparity counted in runs), tracks
+    how many marks the head successor is behind; its window ends at that
+    mark. O(n_pq + n_sq) state.
   - matrix: a dependence matrix, one row of pending predecessor slots per
     queued successor. O(n_pq * n_sq) state, almost no logic; cheaper for
     shallow successor queues.
+  - exact (only by `depScheme`, never picked by auto): runs plus one
+    register, the window already claimed, so the head's boundary is
+    resolved however many runs it is behind.
 
 The dep arrays' pointers are shared per port (Queue._shared_dep_state). The
 predecessor array lives in the queue's physical slot frame, because its slots
@@ -40,13 +44,13 @@ index, the pointer is the bare generation bit, and the lone slot is always
 both head and tail. The `== 0` branches below handle that case.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from functools import reduce
 
 from core_gen.emitters import Emitter
 from core_gen.signals import *
-from core_gen.operators import BitsToOH, MuxLookUp, Reduce
+from core_gen.operators import Reduce
 from core_gen.ir import BinOp, Val, Bit, CustomStatement
 from core_gen.utils import isPow2
 from custom_core_gen.configs import DependencyCheckerConfig
@@ -59,24 +63,46 @@ def _bits(em: Emitter, vec, n: int, bit) -> None:
         em.add_assignment((vec, i), bit(i))
 
 
+def _any(em: Emitter, name: str, bits_name: str, n: int, bit):
+    """name = the OR of bit(i) over every i < n, through the vector bits_name."""
+    out = Logic(em, name, "w")
+    bits = LogicVec(em, bits_name, "w", n)
+    _bits(em, bits, n, bit)
+    Reduce(em, out, bits, BinOp.OR)
+    return out
+
+
 @dataclass
 class _Disparity:
     no_dep_pending: object
     ad: object = None              # same BB: the access-disparity counter
-    pq: object = None              # cross BB: the head successor's window
+    # Cross BB: the head successor's window. A scheme tracking it whole gives
+    # `window` (matrix: the head row, empty once nothing is pending); the mark
+    # schemes give `window_parts`, per-bit functions ORed and masked by
+    # no_dep_pending (runs:
+    # the fill to the head's boundary; exact: that fill and the window
+    # already claimed by an earlier successor of its run).
+    window: object = None
+    window_parts: list = field(default_factory=list)
+    # Scheme-specific grant conditions, ANDed into the grant.
+    conditions: list = field(default_factory=list)
 
 
 class DependencyChecker(Generator):
-    def __init__(self, name: str, suffix: str, configs: DependencyCheckerConfig):
-        super().__init__(name, suffix, configs)
+    # Cross-BB schemes built on the predecessor port's shared marks.
+    MARK_SCHEMES = ("runs", "exact")
 
     def generate(self, em: Emitter, path_rtl, out_file: str = None) -> None:
         c = self.configs
-        # The dep arrays are sized pq/sq.num_entries, which does not scale by it.
-        assert c.dep_entry_ratio == 1, "dep_entry_ratio must be 1"
         self.ports.clear()
         port = self._add_port
         crosses_bb = c.pq_bb != c.sq_bb
+        scheme = self.cross_bb_scheme(c) if crosses_bb else "same_bb"
+        if scheme == "exact" and c.forced_sequential:
+            # A forced-sequential checker reads no window, only whether the
+            # head's run disparity is <= 0, which `runs` already gives
+            # exactly: `exact`'s claimed window would be unused.
+            scheme = "runs"
         n_pq = c.pq.num_entries
         pq_ptr_width = c.pq.q_addr_width + 1
         sq_ptr_width = c.sq.q_addr_width + 1
@@ -84,11 +110,11 @@ class DependencyChecker(Generator):
         # Predecessor. A single-entry queue has no done index to expose
         # (Queue omits its done_ptr_o the same way).
         pq_addr_i = port(LogicVecArray(em, "pq_addr", "i", n_pq, c.pq.addr_width))
-        pq_done_i = (port(LogicVec(em, "pq_done", "i", c.pq.q_addr_width))
-                     if c.pq.q_addr_width > 0 else None)
+        self._pq_done_i = (port(LogicVec(em, "pq_done", "i", c.pq.q_addr_width))
+                           if c.pq.q_addr_width > 0 else None)
         pq_done_en_i = port(Logic(em, "pq_done_en", "i"))
         # Only read by the same-BB scheme; cross-BB tests the end marker instead.
-        pq_length_i = port(LogicVec(em, "pq_length", "i", pq_ptr_width))
+        self._pq_length_i = port(LogicVec(em, "pq_length", "i", pq_ptr_width))
         if crosses_bb:
             # The predecessor's end-of-allocation marker (one-hot of its first
             # unallocated slot) and whether every slot is allocated.
@@ -108,10 +134,10 @@ class DependencyChecker(Generator):
                 sq_empty=port(Logic(em, "sq_dep_empty", "i")),
                 sq_full=port(Logic(em, "sq_dep_full", "i")),
             )
-            if self.cross_bb_scheme(c) == "matrix":
+            if scheme == "matrix":
                 # The predecessor port's shared live-slot bits.
                 self._shared.live = port(LogicVec(em, "pq_live", "i", n_pq))
-            if self.cross_bb_scheme(c) == "runs":
+            if scheme in self.MARK_SCHEMES:
                 # The predecessor port's shared marks towards this successor's
                 # BB (Queue._mark_unit).
                 self._shared.marks = port(LogicVec(em, "pq_marks", "i", n_pq))
@@ -130,14 +156,8 @@ class DependencyChecker(Generator):
         allow_pq_access_o = port(Logic(em, "allow_pq_access", "o"))
 
         em.begin_region('dc_order')
-        self._dep_arrays = None  # set by `_build_dep_arrays` (cross-BB only)
-        scheme = self.cross_bb_scheme(c) if crosses_bb else None
-        if scheme == "matrix":
-            disparity = self._cross_bb_matrix_disparity(em, pq_done_en_i, sq_grant_en_i)
-        elif scheme == "runs":
-            disparity = self._cross_bb_runs_disparity(em, pq_done_en_i, sq_grant_en_i)
-        else:
-            disparity = self._same_bb_disparity(em, pq_done_en_i, sq_grant_en_i)
+        self._dep_empty = None  # (pq, sq), set by `_bb_handshakes` (cross-BB only)
+        disparity = getattr(self, f"_{scheme}_disparity")(em, pq_done_en_i, sq_grant_en_i)
         no_dep_pending = disparity.no_dep_pending
         allow_pq, extra_sq = self._bb_execution_gates()
 
@@ -151,22 +171,14 @@ class DependencyChecker(Generator):
             )
             grant = extra_sq + [no_dep_pending]
         else:
-            if scheme == "matrix":
-                check_mask, conditions = self._cross_bb_matrix_window(em, disparity)
-            elif scheme == "runs":
-                check_mask, conditions = self._cross_bb_runs_window(em, disparity)
-            else:
-                check_mask, conditions = self._same_bb_window(
-                    em, disparity, pq_done_i, pq_length_i)
+            window = self._same_bb_window if scheme == "same_bb" else self._cross_bb_window
+            check_mask, conditions = window(em, disparity)
 
             # A conflict: a pending (masked) predecessor entry with the head
             # successor's address.
             em.begin_region('dc_compare')
-            conflict = Logic(em, "conflict", "w")
-            conflicts = LogicVec(em, "conflicts", "w", n_pq)
-            _bits(em, conflicts, n_pq, lambda i: Val(check_mask, i).when(
+            conflict = _any(em, "conflict", "conflicts", n_pq, lambda i: Val(check_mask, i).when(
                 Val(pq_addr_i, i) == sq_head).else_(Bit(0)))
-            Reduce(em, conflict, conflicts, BinOp.OR)
 
             em.add_comment(
                 "Allow the successor access if:\n"
@@ -178,7 +190,6 @@ class DependencyChecker(Generator):
             grant = conditions + extra_sq + [~conflict | no_dep_pending]
         em.add_assignment(allow_pq_access_o, allow_pq)
         em.add_assignment(allow_sq_access_o, reduce(lambda a, b: a & b, grant))
-        em.begin_region(None)
         self._write_to_file(em, path_rtl, out_file)
 
     @staticmethod
@@ -207,10 +218,21 @@ class DependencyChecker(Generator):
 
         Same-BB: no arrays; the AD counter's underflow guard (`_ad_counter`).
         """
-        if self._dep_arrays is None:
+        if self._dep_empty is None:
             return self._pq_underflow_gate, []
-        pq, sq = self._dep_arrays
-        return ~pq.empty, [~sq.empty]
+        pq_empty, sq_empty = self._dep_empty
+        return ~pq_empty, [~sq_empty]
+
+    @staticmethod
+    def _count(em: Emitter, counter, delta_name: str, up, down) -> None:
+        """counter += up - down. One adder; the +1 / 0 / -1 delta is built
+        bitwise (two's complement) because the Verilog emitter cannot nest
+        signed literals in a when-else."""
+        delta = LogicVec(em, delta_name, "w", counter.size)
+        em.add_assignment((delta, 0), up ^ down)
+        for b in range(1, counter.size):
+            em.add_assignment((delta, b), down & ~up)
+        em.add_assignment(counter, counter + delta)
 
     @staticmethod
     def _sign_extend(em: Emitter, name: str, sig, width: int):
@@ -234,57 +256,60 @@ class DependencyChecker(Generator):
         em.add_assignment(no_dep_pending, ad < Val(0, size=self.configs.access_disparity_width))
         return _Disparity(no_dep_pending, ad=ad)
 
-    def _same_bb_window(self, em: Emitter, disparity: _Disparity, pq_done_i, pq_length_i):
+    def _same_bb_window(self, em: Emitter, disparity: _Disparity):
         """The window is the predecessor slots at head-relative index 0..AD."""
         n_pq = self.configs.pq.num_entries
-        n = self.configs.pq.q_addr_width
+        addr_width = self.configs.pq.q_addr_width
         ad_width = self.configs.access_disparity_width
         ad, no_dep_pending = disparity.ad, disparity.no_dep_pending
+        pq_done_i = self._pq_done_i
 
         # Wide enough to hold AD in full and n_pq as a POSITIVE signed number,
         # so AD, slot indices and the queue length compare without wrapping.
-        cmp_width = max(ad_width, n + 2)
+        cmp_width = max(ad_width, addr_width + 2)
         ad_cmp = self._sign_extend(em, "ad_cmp", ad, cmp_width)
         # pq_length is non-negative: zero-extension keeps its value.
         pq_length_cmp = LogicVec(em, "pq_length_cmp", "w", cmp_width, is_signed=True)
-        em.add_assignment(pq_length_cmp, Val(0, cmp_width - n - 1).concat(pq_length_i))
+        em.add_assignment(pq_length_cmp,
+                          Val(0, cmp_width - addr_width - 1).concat(self._pq_length_i))
 
         # check_mask[j] = AD >= 0 and (j - pq_done) mod n_pq <= min(AD, n_pq - 1)
         # Computed per slot from pq_done and a saturated AD (a LUT or two per
         # bit) rather than as a thermometer of AD rotated by pq_done.
         check_mask = LogicVec(em, "check_mask", "w", n_pq)
-        if n == 0:
+        if addr_width == 0:
             # Single entry: the lone slot is always head-relative index 0.
             em.add_assignment((check_mask, 0), ~no_dep_pending)
         else:
             # AD saturated into [0, n_pq - 1]: AD can reach n_pq (see
             # ad_not_maxed) and must then still select the whole queue.
             # Negative AD is masked by no_dep_pending instead.
-            ad_slice = em.slice_var(ad_cmp.getNameRead(), n - 1, 0)
+            ad_slice = em.slice_var(ad_cmp.getNameRead(), addr_width - 1, 0)
             # ad_cmp is `signed`; VHDL needs the slice converted explicitly.
             ad_low = (f"std_logic_vector({ad_slice})"
                       if em.get_file_suffix() == "vhd" else ad_slice)
-            ad_sat = LogicVec(em, "ad_sat", "w", n)
-            em.add_assignment(ad_sat, Val((1 << n) - 1, size=n).when(
+            ad_sat = LogicVec(em, "ad_sat", "w", addr_width)
+            em.add_assignment(ad_sat, Val((1 << addr_width) - 1, size=addr_width).when(
                 ad_cmp >= Val(n_pq - 1, size=cmp_width)).else_(Val(ad_low)))
-            # Head-relative index of each slot. For a power of two the n-bit
+            # Head-relative index of each slot. For a power of two the
             # subtraction wraps exactly; otherwise add n_pq back when pq_done
             # lies above j.
-            rel_idx = LogicVecArray(em, "rel_idx", "w", n_pq, n)
+            rel_idx = LogicVecArray(em, "rel_idx", "w", n_pq, addr_width)
             if not isPow2(n_pq):
-                # n + 1 bits hold n_pq + j < 2 n_pq; the result (< n_pq) fits
-                # back into n bits.
-                pq_done_ext = LogicVec(em, "pq_done_ext", "w", n + 1)
+                # One more bit holds n_pq + j < 2 n_pq; the result (< n_pq)
+                # fits back into addr_width bits.
+                pq_done_ext = LogicVec(em, "pq_done_ext", "w", addr_width + 1)
                 em.add_assignment(pq_done_ext, Bit(0).concat(pq_done_i))
             for j in range(n_pq):
                 if isPow2(n_pq):
-                    em.add_assignment(rel_idx[j], Val(j, size=n) - pq_done_i)
+                    em.add_assignment(rel_idx[j], Val(j, size=addr_width) - pq_done_i)
                 else:
-                    wide = LogicVec(em, f"rel_idx_wide_{j}", "w", n + 1)
+                    wide = LogicVec(em, f"rel_idx_wide_{j}", "w", addr_width + 1)
                     em.add_assignment(wide, (Val(j) - pq_done_ext).when(
-                        pq_done_ext <= Val(j, size=n + 1)).else_(Val(n_pq + j) - pq_done_ext))
-                    em.add_assignment(
-                        rel_idx[j], Val(em.slice_var(wide.getNameRead(), n - 1, 0)))
+                        pq_done_ext <= Val(j, size=addr_width + 1)).else_(
+                            Val(n_pq + j) - pq_done_ext))
+                    em.add_assignment(rel_idx[j], Val(
+                        em.slice_var(wide.getNameRead(), addr_width - 1, 0)))
                 em.add_assignment((check_mask, j), ~no_dep_pending & (rel_idx[j] <= ad_sat))
 
         # The predecessor must have allocated the window's last entry:
@@ -324,13 +349,7 @@ class DependencyChecker(Generator):
         # 0: one predecessor access to check, at index 0. -1 when the
         # successor precedes the predecessor in the BB (nothing to check yet).
         ad.regInit(init=-1 if self.configs.succ_can_execute_once else 0)
-        # One adder; the +1 / 0 / -1 delta is built bitwise (two's complement)
-        # because the Verilog emitter cannot nest signed literals in a when-else.
-        delta = LogicVec(em, "ad_delta", "w", ad_width)
-        em.add_assignment((delta, 0), sq_grant_en ^ pq_done_en)
-        for b in range(1, ad_width):
-            em.add_assignment((delta, b), pq_done_en & ~sq_grant_en)
-        em.add_assignment(ad, ad + delta)
+        self._count(em, ad, "ad_delta", sq_grant_en, pq_done_en)
 
         # Guard at a width holding AD - pending without wrapping
         # (AD in [min, max], pending in [0, n_pq]).
@@ -349,35 +368,30 @@ class DependencyChecker(Generator):
         return ad
 
     # ===--------------------------------------------------------------------===
-    # Cross-BB scheme, dependence-matrix variant (`depMatrix`)
+    # Cross-BB schemes
     # ===--------------------------------------------------------------------===
 
-    def _cross_bb_matrix_disparity(self, em: Emitter, pq_done_en, sq_grant_en) -> _Disparity:
+    def _matrix_disparity(self, em: Emitter, pq_done_en, sq_grant_en) -> _Disparity:
         """A classic dependence matrix, one row per queued successor.
 
         `pq_live[p]` (shared per predecessor port, Queue._shared_dep_state):
         predecessor slot p is BB-executed and not yet completed. A successor
-        BB execution copies pq_live
-        into its row: exactly the predecessor accesses preceding it in program
-        order that are still pending. A predecessor completion clears its
-        column in every row. The rows are head-anchored like the successor
-        dep array (row 0 = head successor, shift down on its retire), so the
-        head row needs no read mux. No predecessor pending: row 0 is zero."""
+        BB execution copies pq_live into its row: exactly the predecessor
+        accesses preceding it in program order that are still pending. A
+        predecessor completion clears its column in every row. The rows are
+        head-anchored like the successor dep array, so the head row needs no
+        read mux. No predecessor pending: row 0 is zero."""
         n_pq = self.configs.pq.num_entries
         n_sq = self.configs.sq.num_entries
-        x = self._explicit_ptrs(em)
+        shared = self._bb_handshakes(em)
         em.begin_region('dc_live')
-        pq_head_oh, pq_tail_oh, pq_tail_en = x.pq_head_oh, x.pq_tail_oh, x.pq_tail_en
-        sq_tail_oh, sq_tail_en = x.sq_tail_oh, x.sq_tail_en
-
         # Column clear: the predecessor completing this cycle.
         clear_col = LogicVec(em, "pq_clear_col", "w", n_pq)
-        _bits(em, clear_col, n_pq, lambda p: pq_done_en & Val(pq_head_oh, p))
-        live = x.live
+        _bits(em, clear_col, n_pq, lambda p: pq_done_en & Val(shared.pq_head_oh, p))
         # The row a successor BB execution writes (the two BBs never execute
         # in the same cycle, so no same-cycle predecessor push to include).
         new_row = LogicVec(em, "dep_new_row", "w", n_pq)
-        _bits(em, new_row, n_pq, lambda p: Val(live, p) & ~Val(clear_col, p))
+        _bits(em, new_row, n_pq, lambda p: Val(shared.live, p) & ~Val(clear_col, p))
 
         em.begin_region('dc_rows')
         rows = [LogicArray(em, f"dep_row_{i}", "r", n_pq) for i in range(n_sq)]
@@ -385,7 +399,8 @@ class DependencyChecker(Generator):
         for i in range(n_sq):
             for p in range(n_pq):
                 em.add_assignment(written[i][p], Val(new_row, p).when(
-                    Val(sq_tail_oh, i) & sq_tail_en).else_(rows[i][p] & ~Val(clear_col, p)))
+                    Val(shared.sq_tail_oh, i) & shared.sq_tail_en).else_(
+                        rows[i][p] & ~Val(clear_col, p)))
         for i in range(n_sq):
             for p in range(n_pq):
                 above = written[i + 1][p] if i + 1 < n_sq else Bit(0)
@@ -399,131 +414,174 @@ class DependencyChecker(Generator):
         Reduce(em, dep_pending, head_row, BinOp.OR)
         no_dep_pending = Logic(em, "no_dep_pending", "w")
         em.add_assignment(no_dep_pending, ~dep_pending)
+        return _Disparity(no_dep_pending, window=head_row)
 
-        return _Disparity(no_dep_pending, pq=head_row)
-
-    def _explicit_ptrs(self, em: Emitter):
-        """The shared per-port dep state plus this checker's BB-execution
-        handshakes: a BB may execute only while every dep array on it has
-        room, so each side is ready while its array is not full."""
-        x = self._shared
-        em.begin_region('dc_ptrs')
-        x.sq_tail_en = self._make_bb_ports(em, "sq", ~x.sq_full)
-        x.pq_tail_en = self._make_bb_ports(em, "pq", ~x.pq_full)
-        self._dep_arrays = (SimpleNamespace(empty=x.pq_empty), SimpleNamespace(empty=x.sq_empty))
-        return x
-
-    # ===--------------------------------------------------------------------===
-    # Cross-BB scheme, run-disparity variant (`depScheme: runs`)
-    # ===--------------------------------------------------------------------===
-
-    def _cross_bb_runs_disparity(self, em: Emitter, pq_done_en, sq_grant_en) -> _Disparity:
+    def _runs_disparity(self, em: Emitter, pq_done_en, sq_grant_en) -> _Disparity:
         """The marks and dependent bits of the mark scheme, tracked by one
         signed counter instead of a boundary register.
 
         A mark lands exactly when a dependent successor is stamped, both in
         program order, and predecessors complete in order: the k-th marked
-        completion satisfies the k-th dependent run. So with
-          C = dependent successors retired - marked predecessors completed,
-        the run disparity of the head successor is D = C + S(head):
-          D <= 0: every predecessor before it has completed;
-          D == 1: its boundary is the first live mark from the predecessor
-                  head, so the window is [head, first mark];
-          D == k: earlier runs were granted early and their marks are still
-                  pending; the window ends at the k-th mark. Only the first
-                  `run_lookahead` marks are resolved; beyond that the head
-                  waits for completions, which is always safe (those accesses
-                  precede it in program order).
+        completion satisfies the k-th dependent run. So the run disparity
+          dependent successors retired - marked predecessors completed
+        plus the head's own dependent bit is how many runs the head successor
+        is behind, its head disparity:
+          <= 0: every predecessor before it has completed;
+          == 1: its boundary is the first live mark from the predecessor
+                head, so the window is [head, first mark];
+          == k: earlier runs were granted early and their marks are still
+                pending; the window ends at the k-th mark. Only the first
+                `run_lookahead` marks are resolved; beyond that the head
+                waits for completions, which is always safe (those accesses
+                precede it in program order).
         No announce, no boundary register, no clear walk: the dependent
         bits are written once and only read at the head."""
-        c = self.configs
-        n_pq, n_sq = c.pq.num_entries, c.sq.num_entries
-        x = self._explicit_ptrs(em)
-        s0 = self._succ_bits(em, n_sq, x, sq_grant_en)
-
-        em.begin_region('dc_counter')
-        # C in [-n_sq, n_pq]: a satisfied run waits in the successor queue,
-        # a run that left early holds a live mark.
-        cw = max(n_sq, n_pq + 1).bit_length() + 1
-        cnt = LogicVec(em, "run_disparity", "r", cw, is_signed=True)
-        cnt.regInit(init=0)
-        s_ret = Logic(em, "run_succ_retire", "w")
-        em.add_assignment(s_ret, sq_grant_en & s0)
-        p_ret = Logic(em, "run_pred_retire", "w")
-        em.add_assignment(p_ret, pq_done_en & x.mark_head)
-        delta = LogicVec(em, "run_delta", "w", cw)
-        em.add_assignment((delta, 0), s_ret ^ p_ret)
-        for b in range(1, cw):
-            em.add_assignment((delta, b), p_ret & ~s_ret)
-        em.add_assignment(cnt, cnt + delta)
-        # D = C + S(head), compared without an adder: D <= k  <=>  C <= k - S.
-        c_le = {}
-
-        def cnt_le(k):
-            # (Comparisons get their own wires: the Verilog emitter cannot
-            # nest signed literals in a when-else.)
-            if k not in c_le:
-                c_le[k] = Logic(em, f"run_c_le_{k}".replace("-", "m"), "w")
-                em.add_assignment(c_le[k], cnt <= Val(k, size=cw))
-            return c_le[k]
-
-        def le(k):
-            out = Logic(em, f"run_d_le_{k}", "w")
-            em.add_assignment(out, cnt_le(k - 1).when(s0).else_(cnt_le(k)))
-            return out
-        no_dep_pending = le(0)
-        la = c.run_lookahead
-        resolved = le(la)
+        n_pq = self.configs.pq.num_entries
+        lookahead = self.configs.run_lookahead
+        shared = self._bb_handshakes(em)
+        _, head_disparity_le = self._run_disparity(em, shared, pq_done_en, sq_grant_en)
+        no_dep_pending = head_disparity_le(0)
+        resolved = head_disparity_le(lookahead)
 
         em.begin_region('dc_fill')
         # Window per lookahead step: [head, i-th mark].
-        fills, rest = [], x.marks
-        for i in range(1, la + 1):
+        fills, rest = [], shared.marks
+        for i in range(1, lookahead + 1):
             fill = LogicVec(em, f"run_window_{i}", "w", n_pq)
-            self._fill_to_first_set(em, fill, rest, x.pq_head_oh, n_pq, f"run_window_{i}")
+            self._fill_to_first_set(em, fill, rest, shared.pq_head_oh, n_pq, f"run_window_{i}")
             fills.append(fill)
-            if i < la:
-                nxt = LogicVec(em, f"run_marks_beyond_{i}", "w", n_pq)
-                em.add_assignment(nxt, rest & ~fill)
-                rest = nxt
+            if i < lookahead:
+                beyond = LogicVec(em, f"run_marks_beyond_{i}", "w", n_pq)
+                em.add_assignment(beyond, rest & ~fill)
+                rest = beyond
         window = fills[0]
-        for i in range(2, la + 1):
+        for i in range(2, lookahead + 1):
             sel = LogicVec(em, f"run_window_sel_{i}", "w", n_pq)
-            em.add_assignment(sel, window.when(le(i - 1)).else_(fills[i - 1]))
+            em.add_assignment(sel, window.when(head_disparity_le(i - 1)).else_(fills[i - 1]))
             window = sel
-        self._runs_resolved = resolved
-        return _Disparity(no_dep_pending, pq=window)
+        return _Disparity(no_dep_pending, window_parts=[lambda i: Val(window, i)],
+                          conditions=[resolved])
 
-    def _cross_bb_runs_window(self, em: Emitter, disparity: _Disparity):
-        """[head, boundary] while a dependence is pending; blocked while the
-        boundary lies beyond the resolved lookahead."""
+    def _exact_disparity(self, em: Emitter, pq_done_en, sq_grant_en) -> _Disparity:
+        """`runs` without its lookahead limit, by one register per checker:
+        the claimed window (n_pq bits, predecessor slot frame).
+
+        When a dependent successor retires with a head disparity >= 1, its
+        window [predecessor head, boundary] is latched into the claimed
+        window; predecessor completions clear it slot by slot. Successors
+        retire in order, so the claimed window always runs from the
+        predecessor head to the boundary of the most recent dependent run
+        that left, and every mark inside it is dead (its run has left).
+        Hence, while the head disparity is >= 1:
+          a dependent head: its boundary is the first mark from the
+              predecessor head outside the claimed window (the oldest
+              unretired dependent run's), so its window is the fill up to
+              that mark, however many runs it is behind;
+          a non-dependent head: it continues the run that claimed the window
+              (no dependent successor retired since), so its window is the
+              claimed one.
+        The fill reads registered state only, as in `runs`, and the only
+        event that moves the claimed window is a dependent successor
+        retiring: no announce of a new head is needed."""
+        n_pq = self.configs.pq.num_entries
+        shared = self._bb_handshakes(em)
+        head_dependent, head_disparity_le = self._run_disparity(
+            em, shared, pq_done_en, sq_grant_en)
+        no_dep_pending = head_disparity_le(0)
+
+        em.begin_region('dc_claim')
+        claim_window = LogicArray(em, "claim_window", "r", n_pq)
+        em.begin_region('dc_fill')
+        live_marks = LogicVec(em, "exact_marks", "w", n_pq)
+        _bits(em, live_marks, n_pq, lambda i: Val(shared.marks, i) & ~claim_window[i])
+        fill = LogicVec(em, "exact_fill", "w", n_pq)
+        self._fill_to_first_set(em, fill, live_marks, shared.pq_head_oh, n_pq, "exact_fill")
+        # The claimed window covers a head that continues its run; a head
+        # starting a new run (dependent) adds the fill, which extends it.
+        unclaimed = LogicVec(em, "exact_unclaimed", "w", n_pq)
+        _bits(em, unclaimed, n_pq, lambda i: Val(fill, i) & head_dependent)
+
+        em.begin_region('dc_claim')
+        take = Logic(em, "claim_take", "w")
+        em.add_assignment(take, sq_grant_en & head_dependent & ~no_dep_pending)
+        for i in range(n_pq):
+            # (Separate wires: Vivado rejects a when-else nested in an
+            # expression, a VHDL-2019 construct.)
+            kept = Logic(em, f"claim_kept_{i}", "w")
+            em.add_assignment(kept, Val(fill, i).when(take).else_(claim_window[i]))
+            em.add_assignment(claim_window[i],
+                              kept & ~(pq_done_en & Val(shared.pq_head_oh, i)))
+        claim_window.regInit()
+        return _Disparity(no_dep_pending, window_parts=[
+            lambda i: Val(unclaimed, i), lambda i: claim_window[i]])
+
+    def _run_disparity(self, em: Emitter, shared, pq_done_en, sq_grant_en):
+        """The successor's dependent bits and the run disparity, shared by
+        `runs` and `exact`. Returns the head successor's dependent bit and
+        head_disparity_le(k): whether its head disparity (the run disparity
+        plus that bit) is at most k."""
+        n_pq, n_sq = self.configs.pq.num_entries, self.configs.sq.num_entries
+        head_dependent = self._succ_bits(em, n_sq, shared, sq_grant_en)
+
+        em.begin_region('dc_counter')
+        # In [-n_sq, n_pq]: a satisfied run waits in the successor queue, a
+        # run that left early holds a live mark.
+        width = max(n_sq, n_pq + 1).bit_length() + 1
+        run_disparity = LogicVec(em, "run_disparity", "r", width, is_signed=True)
+        run_disparity.regInit(init=0)
+        succ_retire = Logic(em, "run_succ_retire", "w")
+        em.add_assignment(succ_retire, sq_grant_en & head_dependent)
+        pred_retire = Logic(em, "run_pred_retire", "w")
+        em.add_assignment(pred_retire, pq_done_en & shared.mark_head)
+        self._count(em, run_disparity, "run_delta", succ_retire, pred_retire)
+        # Compared without an adder: run disparity + bit <= k  <=>
+        # run disparity <= k - bit.
+        run_disparity_le = {}
+
+        def le(k):
+            # (Comparisons get their own wires: the Verilog emitter cannot
+            # nest signed literals in a when-else.)
+            if k not in run_disparity_le:
+                run_disparity_le[k] = Logic(
+                    em, f"run_disparity_le_{k}".replace("-", "m"), "w")
+                em.add_assignment(run_disparity_le[k], run_disparity <= Val(k, size=width))
+            return run_disparity_le[k]
+
+        def head_disparity_le(k):
+            out = Logic(em, f"head_disparity_le_{k}", "w")
+            em.add_assignment(out, le(k - 1).when(head_dependent).else_(le(k)))
+            return out
+        return head_dependent, head_disparity_le
+
+    def _cross_bb_window(self, em: Emitter, disparity: _Disparity):
+        """[predecessor head, boundary] while a dependence is pending. It is
+        a contiguous run from the predecessor head (completions leave in
+        order), so it is unallocated exactly when the end-of-allocation
+        marker lies in it, unless the queue is full."""
         em.begin_region('dc_window')
         n_pq = self.configs.pq.num_entries
-        check_mask = LogicVec(em, "check_mask", "w", n_pq)
-        _bits(em, check_mask, n_pq,
-              lambda i: Val(disparity.pq, i) & ~disparity.no_dep_pending)
-        end_bits = LogicVec(em, "ad_end_in_window_bits", "w", n_pq)
-        _bits(em, end_bits, n_pq, lambda i: Val(check_mask, i) & Val(self._pq_alloc_end_oh_i, i))
-        end_in_window = Logic(em, "ad_end_in_window", "w")
-        Reduce(em, end_in_window, end_bits, BinOp.OR)
+        check_mask = disparity.window
+        if check_mask is None:
+            check_mask = LogicVec(em, "check_mask", "w", n_pq)
+            _bits(em, check_mask, n_pq, lambda i: reduce(
+                lambda a, b: a | b, [part(i) for part in disparity.window_parts])
+                & ~disparity.no_dep_pending)
+        end_in_window = _any(em, "ad_end_in_window", "ad_end_in_window_bits", n_pq,
+                             lambda i: Val(check_mask, i) & Val(self._pq_alloc_end_oh_i, i))
         allocated = Logic(em, "corresponding_entry_allocated", "w")
         em.add_assignment(allocated, self._pq_alloc_full_i | ~end_in_window)
-        return check_mask, [allocated, self._runs_resolved]
+        return check_mask, [allocated] + disparity.conditions
 
-    def _cross_bb_matrix_window(self, em: Emitter, disparity: _Disparity):
-        """The window is the head row. It is a contiguous run from the
-        predecessor head (completions leave in order), so it is unallocated
-        exactly when the end-of-allocation marker lies in it, unless full."""
-        em.begin_region('dc_window')
-        n_pq = self.configs.pq.num_entries
-        head_row = disparity.pq
-        end_bits = LogicVec(em, "ad_end_in_window_bits", "w", n_pq)
-        _bits(em, end_bits, n_pq, lambda i: Val(head_row, i) & Val(self._pq_alloc_end_oh_i, i))
-        end_in_window = Logic(em, "ad_end_in_window", "w")
-        Reduce(em, end_in_window, end_bits, BinOp.OR)
-        allocated = Logic(em, "corresponding_entry_allocated", "w")
-        em.add_assignment(allocated, self._pq_alloc_full_i | ~end_in_window)
-        return head_row, [allocated]
+    def _bb_handshakes(self, em: Emitter):
+        """The shared per-port dep state plus this checker's BB-execution
+        handshakes: a BB may execute only while every dep array on it has
+        room, so each side is ready while its array is not full."""
+        shared = self._shared
+        em.begin_region('dc_ptrs')
+        shared.sq_tail_en = self._make_bb_ports(em, "sq", ~shared.sq_full)
+        shared.pq_tail_en = self._make_bb_ports(em, "pq", ~shared.pq_full)
+        self._dep_empty = (shared.pq_empty, shared.sq_empty)
+        return shared
 
     def _make_bb_ports(self, em: Emitter, prefix: str, ready):
         valid_i = self._add_port(Logic(em, f"{prefix}_bb_valid", "i"))
@@ -533,17 +591,18 @@ class DependencyChecker(Generator):
         em.add_assignment(executed, valid_i & ready)
         return executed
 
-    def _succ_bits(self, em: Emitter, n: int, x, head_en):
+    def _succ_bits(self, em: Emitter, n: int, shared, head_en):
         """The successor's dependent (run-start) bits, head-anchored: slot 0
         is the head and the array shifts down on a retire. A BB execution
-        writes the shared mark unit's value at slot cnt, which then shifts
-        with the pop, so no stale bit sits above cnt. Returns the head's bit."""
+        writes the shared mark unit's value at the tail slot, which then
+        shifts with the pop, so no stale bit sits above it. Returns the
+        head's bit."""
         em.begin_region('dc_sbits')
         array = LogicArray(em, "sq_array", "r", n)
         written = LogicArray(em, "sq_array_written", "w", n)
         for i in range(n):
-            em.add_assignment(written[i], x.mark_sval.when(
-                Val(x.sq_tail_oh, i) & x.sq_tail_en).else_(array[i]))
+            em.add_assignment(written[i], shared.mark_sval.when(
+                Val(shared.sq_tail_oh, i) & shared.sq_tail_en).else_(array[i]))
         for i in range(n):
             above = written[i + 1] if i + 1 < n else Bit(0)
             em.add_assignment(array[i], above.when(head_en).else_(written[i]))

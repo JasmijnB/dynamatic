@@ -7,9 +7,9 @@ from collections import defaultdict
 # Ensure the package root is on the path when invoked from an arbitrary directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core_gen.signals import Logic, LogicVec, LogicArray, LogicVecArray
+from core_gen.signals import Logic, LogicArray, LogicVecArray
 from core_gen.emitters import Emitter, VerilogEmitter, VHDLEmitter
-from core_gen.ir import Bit, CustomStatement
+from core_gen.ir import Bit
 from custom_core_gen.configs import OrderingNetworkConfig
 from custom_core_gen.generators.structure import Structure
 
@@ -51,10 +51,9 @@ class OrderingNetworkWrapper:
         self.name = config.name
         self.core_name = config.name + "_core"
 
-        # Assume all queues share the same data/addr/id widths
+        # Assume all queues share the same data/addr widths
         self.dataW = config.queues[0].data_width
         self.addrW = config.queues[0].addr_width
-        self.idW = config.queues[0].id_width
 
         # Count ports of each type and groups
         self.numLoads = sum(
@@ -77,17 +76,6 @@ class OrderingNetworkWrapper:
             if src_bb != dst_bb:
                 self.cross_bb_ids.add(src_bb)
                 self.cross_bb_ids.add(dst_bb)
-
-    # ------------------------------------------------------------------
-    # Helper: build the mangled structure-module port name
-    # ------------------------------------------------------------------
-
-    def _sp(self, base: str, q_idx: int, within_group: int, direction: str) -> str:
-        """Return the flattened structure-module port name.
-
-        direction is '_i' for inputs, '_o' for outputs.
-        """
-        return f"{base}_q{q_idx}_array_{within_group}{direction}"
 
     # ------------------------------------------------------------------
     # Wrapper  (kernel -> ordering-network -> MC)
@@ -186,19 +174,14 @@ class OrderingNetworkWrapper:
             em, "io_stDataToMC_ready", "i", self.numStores, dyn_comp=True
         )
 
-        # ---- Per-load internal signals ----
+        # ---- Internal signals ----
         io_loadEn = [Logic(em, f"io_loadEn_{i}", "w") for i in range(self.numLoads)]
-        wresp_valid = [
-            Logic(em, f"wresp_valid_{i}", "w", force_reg=True)
-            for i in range(self.numStores)
-        ]
+        # A store's write response: one cycle after the MC accepts its address.
+        wresp_valid = [Logic(em, f"wresp_valid_{i}", "r") for i in range(self.numStores)]
         io_storeEn = [Logic(em, f"io_storeEn_{i}", "w") for i in range(self.numStores)]
         mem_data_valid_st = [
             Logic(em, f"mem_data_valid_st_{i}", "w") for i in range(self.numStores)
         ]
-
-        empty_ld = [Logic(em, f"empty_ld_{i}", "w") for i in range(self.numLoads)]
-        empty_st = [Logic(em, f"empty_st_{i}", "w") for i in range(self.numStores)]
 
         # ---- io_ctrl: groups without a cross-BB dependency always accept; the
         # rest are driven by the structure's bb_ready ports during instantiation.
@@ -206,39 +189,9 @@ class OrderingNetworkWrapper:
             if i not in self.cross_bb_ids:
                 em.add_assignment(io_ctrl_ready[i], Bit(1))
 
-        # ---- Per-store register processes ----
         for i in range(self.numStores):
-            em.add_comment(f"Process for wresp_valid_{i}")
-            em.add_statement(em.get_reg_init_str())
-            em.increase_indent()
-            em.add_custom_statement(
-                CustomStatement("if rst = '1' then", "if (rst) begin")
-            )
-            em.increase_indent()
-            em.add_assignment(wresp_valid[i], Bit(0), in_process=True)
-            em.decrease_indent()
-            em.add_custom_statement(
-                CustomStatement("elsif rising_edge(clk) then", "end\nelse begin")
-            )
-            em.increase_indent()
-            em.add_custom_statement(
-                CustomStatement(
-                    f"if {io_storeEn[i].getNameRead()} = '1' and {io_stAddrToMC_ready[i].getNameRead()} = '1' then",
-                    f"if ({io_storeEn[i].getNameRead()} && {io_stAddrToMC_ready[i].getNameRead()}) begin",
-                )
-            )
-            em.increase_indent()
-            em.add_assignment(wresp_valid[i], Bit(1), in_process=True)
-            em.decrease_indent()
-            em.add_custom_statement(CustomStatement("else", "end\nelse begin"))
-            em.increase_indent()
-            em.add_assignment(wresp_valid[i], Bit(0), in_process=True)
-            em.decrease_indent()
-            em.add_custom_statement(CustomStatement("end if;", "end"))
-            em.decrease_indent()
-            em.add_custom_statement(CustomStatement("end if;", "end"))
-            em.decrease_indent()
-            em.add_custom_statement(CustomStatement("end process;", "end"))
+            em.add_assignment(wresp_valid[i], io_storeEn[i] & io_stAddrToMC_ready[i])
+            wresp_valid[i].regInit(init=0)
 
         # ---- Signal assignments ----
         em.add_comment("Signal Assignments")
@@ -260,131 +213,55 @@ class OrderingNetworkWrapper:
             em.add_map(f"bb_valid_{bb_id}_i", io_ctrl_valid[bb_id].getNameRead())
             em.add_map(f"bb_ready_{bb_id}_o", io_ctrl_ready[bb_id].getNameWrite())
 
-        ld_counter = 0
-        st_counter = 0
+        # Each port's structure ports (by base name, its direction the last
+        # two characters) and the wrapper signal they connect to (None: open).
+        def load_ports(i):
+            return [
+                ("circ_addr_i", io_ldAddr_bits[i]), ("circ_addr_valid_i", io_ldAddr_valid[i]),
+                ("circ_addr_ready_o", io_ldAddr_ready[i]), ("circ_data_o", io_ldData_bits[i]),
+                ("circ_data_valid_o", io_ldData_valid[i]),
+                ("circ_data_ready_i", io_ldData_ready[i]),
+                ("mem_addr_o", io_ldAddrToMC_bits[i]), ("mem_addr_valid_o", io_loadEn[i]),
+                ("mem_data_i", io_ldDataFromMC_bits[i]),
+                ("mem_addr_ready_i", io_ldAddrToMC_ready[i]),
+                ("mem_data_valid_i", io_ldDataFromMC_valid[i]),
+                ("mem_data_ready_o", io_ldDataFromMC_ready[i]), ("empty_o", None),
+            ]
+
+        def store_ports(i):
+            return [
+                ("circ_addr_i", io_stAddr_bits[i]), ("circ_addr_valid_i", io_stAddr_valid[i]),
+                ("circ_addr_ready_o", io_stAddr_ready[i]), ("circ_data_i", io_stData_bits[i]),
+                ("circ_data_valid_i", io_stData_valid[i]),
+                ("circ_data_ready_o", io_stData_ready[i]),
+                ("mem_addr_o", io_stAddrToMC_bits[i]), ("mem_addr_valid_o", io_storeEn[i]),
+                ("mem_data_o", io_stDataToMC_bits[i]),
+                ("mem_addr_ready_i", io_stAddrToMC_ready[i]),
+                ("mem_data_ready_i", io_stDataToMC_ready[i]),
+                ("mem_data_valid_o", mem_data_valid_st[i]),
+                ("mem_exec_valid_i", wresp_valid[i]), ("mem_exec_ready_o", None),
+                ("empty_o", None),
+            ]
+
         # Position of each port within the array of ports sharing its queue
         # config (config.ports_to_queue need not be a bijection: several ports
         # may point at the same queue_config_idx). Must match structure.py's
         # group_counters exactly, so iterate ports_to_queue in the same order.
         group_counters = defaultdict(int)
+        type_counters = defaultdict(int)
         for q_idx in self.config.ports_to_queue:
             group_slot = group_counters[q_idx]
             group_counters[q_idx] += 1
             q_type = self.config.queues[q_idx].q_type
-            if q_type == "load":
-                i = ld_counter
-                ld_counter += 1
-                em.add_map(
-                    self._sp("circ_addr_i", q_idx, group_slot, "_i"),
-                    io_ldAddr_bits[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("circ_addr_valid_i", q_idx, group_slot, "_i"),
-                    io_ldAddr_valid[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("circ_addr_ready_o", q_idx, group_slot, "_o"),
-                    io_ldAddr_ready[i].getNameWrite(),
-                )
-                em.add_map(
-                    self._sp("circ_data_o", q_idx, group_slot, "_o"),
-                    io_ldData_bits[i].getNameWrite(),
-                )
-                em.add_map(
-                    self._sp("circ_data_valid_o", q_idx, group_slot, "_o"),
-                    io_ldData_valid[i].getNameWrite(),
-                )
-                em.add_map(
-                    self._sp("circ_data_ready_i", q_idx, group_slot, "_i"),
-                    io_ldData_ready[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("mem_addr_o", q_idx, group_slot, "_o"),
-                    io_ldAddrToMC_bits[i].getNameWrite(),
-                )
-                em.add_map(
-                    self._sp("mem_addr_valid_o", q_idx, group_slot, "_o"),
-                    io_loadEn[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("mem_data_i", q_idx, group_slot, "_i"),
-                    io_ldDataFromMC_bits[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("mem_addr_ready_i", q_idx, group_slot, "_i"),
-                    io_ldAddrToMC_ready[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("mem_data_valid_i", q_idx, group_slot, "_i"),
-                    io_ldDataFromMC_valid[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("mem_data_ready_o", q_idx, group_slot, "_o"),
-                    io_ldDataFromMC_ready[i].getNameWrite(),
-                )
-                em.add_map(
-                    self._sp("empty_o", q_idx, group_slot, "_o"), empty_ld[i].getNameRead()
-                )
-
-            elif q_type == "store":
-                i = st_counter
-                st_counter += 1
-                em.add_map(
-                    self._sp("circ_addr_i", q_idx, group_slot, "_i"),
-                    io_stAddr_bits[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("circ_addr_valid_i", q_idx, group_slot, "_i"),
-                    io_stAddr_valid[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("circ_addr_ready_o", q_idx, group_slot, "_o"),
-                    io_stAddr_ready[i].getNameWrite(),
-                )
-                em.add_map(
-                    self._sp("circ_data_i", q_idx, group_slot, "_i"),
-                    io_stData_bits[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("circ_data_valid_i", q_idx, group_slot, "_i"),
-                    io_stData_valid[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("circ_data_ready_o", q_idx, group_slot, "_o"),
-                    io_stData_ready[i].getNameWrite(),
-                )
-                em.add_map(
-                    self._sp("mem_addr_o", q_idx, group_slot, "_o"),
-                    io_stAddrToMC_bits[i].getNameWrite(),
-                )
-                em.add_map(
-                    self._sp("mem_addr_valid_o", q_idx, group_slot, "_o"),
-                    io_storeEn[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("mem_data_o", q_idx, group_slot, "_o"),
-                    io_stDataToMC_bits[i].getNameWrite(),
-                )
-                em.add_map(
-                    self._sp("mem_addr_ready_i", q_idx, group_slot, "_i"),
-                    io_stAddrToMC_ready[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("mem_data_ready_i", q_idx, group_slot, "_i"),
-                    io_stDataToMC_ready[i].getNameRead(),
-                )
-                em.add_map(
-                    self._sp("mem_data_valid_o", q_idx, group_slot, "_o"),
-                    mem_data_valid_st[i].getNameWrite(),
-                )
-                em.add_map(
-                    self._sp("mem_exec_valid_i", q_idx, group_slot, "_i"),
-                    wresp_valid[i].getNameRead(),
-                )
-                em.add_map(self._sp("mem_exec_ready_o", q_idx, group_slot, "_o"))
-                em.add_map(
-                    self._sp("empty_o", q_idx, group_slot, "_o"), empty_st[i].getNameRead()
-                )
+            i = type_counters[q_type]
+            type_counters[q_type] += 1
+            for base, sig in (load_ports if q_type == "load" else store_ports)(i):
+                name = f"{base}_q{q_idx}_array_{group_slot}{base[-2:]}"
+                if sig is None:
+                    em.add_map(name)
+                else:
+                    em.add_map(name, sig.getNameRead() if base.endswith("_i")
+                               else sig.getNameWrite())
 
         em.complete_instantiation()
 

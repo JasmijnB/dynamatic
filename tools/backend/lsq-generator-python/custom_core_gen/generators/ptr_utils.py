@@ -16,7 +16,7 @@ of two, so power-of-two designs are unchanged.
 from core_gen.ir import Val, Bit
 from core_gen.signals import Logic, LogicVec
 from core_gen.utils import isPow2
-from core_gen.operators import WrapAddConst, WrapSub
+from core_gen.operators import BitsToOH, WrapAddConst, WrapSub
 
 
 def _low(em, ptr, n):
@@ -46,6 +46,28 @@ def ptr_next(em, out, ptr, n_entries: int) -> None:
 def ptr_index(em, out, ptr, n_entries: int, n: int) -> None:
     """out (n bits) = the slot of pointer `ptr`: its low bits, for every N."""
     em.add_assignment(out, _low(em, ptr, n))
+
+
+def ptr_full(em, out, a, b, n: int) -> None:
+    """out = pointer a is one lap ahead of b: the same slot, the other
+    generation. With n == 0 the pointer IS the generation bit."""
+    differ = Val(em.index_var(a.getNameRead(), n)) != Val(em.index_var(b.getNameRead(), n))
+    em.add_assignment(out, differ if n == 0 else differ & (_low(em, a, n) == _low(em, b, n)))
+
+
+def slot_one_hot(em, name: str, idx_name: str, ptr, n_entries: int, n: int,
+                 slot=None):
+    """A new n_entries-bit one-hot of ptr's slot, through the n-bit index
+    idx_name, computed by `slot` (ptr_index or count_slot). A single entry
+    (n == 0) is always slot 0."""
+    oh = LogicVec(em, name, "w", n_entries)
+    if n == 0:
+        em.add_assignment(oh, Val(1, size=1))
+    else:
+        idx = LogicVec(em, idx_name, "w", n)
+        (slot or ptr_index)(em, idx, ptr, n_entries, n)
+        BitsToOH(em, oh, idx)
+    return oh
 
 
 def count_slot(em, out, cnt, n_entries: int, n: int) -> None:
