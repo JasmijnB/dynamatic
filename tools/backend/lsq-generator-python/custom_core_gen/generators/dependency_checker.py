@@ -261,7 +261,7 @@ class DependencyChecker(Generator):
         n_pq = self.configs.pq.num_entries
         addr_width = self.configs.pq.q_addr_width
         ad_width = self.configs.access_disparity_width
-        ad, no_dep_pending = disparity.ad, disparity.no_dep_pending
+        ad = disparity.ad
         pq_done_i = self._pq_done_i
 
         # Wide enough to hold AD in full and n_pq as a POSITIVE signed number,
@@ -273,24 +273,23 @@ class DependencyChecker(Generator):
         em.add_assignment(pq_length_cmp,
                           Val(0, cmp_width - addr_width - 1).concat(self._pq_length_i))
 
-        # check_mask[j] = AD >= 0 and (j - pq_done) mod n_pq <= min(AD, n_pq - 1)
-        # Computed per slot from pq_done and a saturated AD (a LUT or two per
+        # check_mask[j] = (j - pq_done) mod n_pq <= AD mod 2^addr_width
+        # Computed per slot from pq_done and AD's low bits (a LUT or two per
         # bit) rather than as a thermometer of AD rotated by pq_done.
+        # The mask only matters while the grant can fire: AD < 0 grants on
+        # no_dep_pending regardless of conflicts, and AD >= n_pq fails
+        # `allocated` (pq_length <= n_pq). In between, AD's low bits are AD.
         check_mask = LogicVec(em, "check_mask", "w", n_pq)
         if addr_width == 0:
             # Single entry: the lone slot is always head-relative index 0.
-            em.add_assignment((check_mask, 0), ~no_dep_pending)
+            em.add_assignment((check_mask, 0), Bit(1))
         else:
-            # AD saturated into [0, n_pq - 1]: AD can reach n_pq (see
-            # ad_not_maxed) and must then still select the whole queue.
-            # Negative AD is masked by no_dep_pending instead.
             ad_slice = em.slice_var(ad_cmp.getNameRead(), addr_width - 1, 0)
             # ad_cmp is `signed`; VHDL needs the slice converted explicitly.
             ad_low = (f"std_logic_vector({ad_slice})"
                       if em.get_file_suffix() == "vhd" else ad_slice)
-            ad_sat = LogicVec(em, "ad_sat", "w", addr_width)
-            em.add_assignment(ad_sat, Val((1 << addr_width) - 1, size=addr_width).when(
-                ad_cmp >= Val(n_pq - 1, size=cmp_width)).else_(Val(ad_low)))
+            ad_idx = LogicVec(em, "ad_idx", "w", addr_width)
+            em.add_assignment(ad_idx, Val(ad_low))
             # Head-relative index of each slot. For a power of two the
             # subtraction wraps exactly; otherwise add n_pq back when pq_done
             # lies above j.
@@ -310,7 +309,7 @@ class DependencyChecker(Generator):
                             Val(n_pq + j) - pq_done_ext))
                     em.add_assignment(rel_idx[j], Val(
                         em.slice_var(wide.getNameRead(), addr_width - 1, 0)))
-                em.add_assignment((check_mask, j), ~no_dep_pending & (rel_idx[j] <= ad_sat))
+                em.add_assignment((check_mask, j), rel_idx[j] <= ad_idx)
 
         # The predecessor must have allocated the window's last entry:
         # pq_length > AD (AD is count - 1).
